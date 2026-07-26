@@ -53,7 +53,6 @@ import type { AppSettings } from '../shared/settings.js';
 import { extractAuthBouquetAndMix } from './utils/auth-utils.js';
 import {
 	ANONYMOUS_BUILTIN_TOOL_IDS,
-	isBuiltInToolVisibleAnonymously,
 	ToolSelectionStrategy,
 	type ToolSelectionContext,
 } from './utils/tool-selection-strategy.js';
@@ -65,7 +64,7 @@ import { registerSkillResources } from './skills/skill-resources.js';
 import { isClientDenied } from '../shared/client-denylist.js';
 import { getSkillCatalog } from './skills/skill-catalog-cache.js';
 import { SERVER_VERSION } from './server-build-info.js';
-import { disableConfiguredTool, parseDisabledTools } from './utils/disabled-tools.js';
+import { parseDisabledTools } from './utils/disabled-tools.js';
 
 // Fallback settings for anonymous users and unavailable API/user settings.
 export const BOUQUET_FALLBACK: AppSettings = {
@@ -76,8 +75,7 @@ export const BOUQUET_FALLBACK: AppSettings = {
 // Bouquet configurations moved to tool-selection-strategy.ts
 
 /**
- * Creates a ServerFactory function that produces McpServer instances with all tools registered
- * The shared ApiClient provides global tool state management across all server instances
+ * Creates request-scoped MCP servers containing only the tools selected for that request.
  */
 export const createServerFactory = (_webServerInstance: WebServer, sharedApiClient: McpApiClient): ServerFactory => {
 	return async (
@@ -209,9 +207,6 @@ export const createServerFactory = (_webServerInstance: WebServer, sharedApiClie
 			? '\nhf:// URIs can be converted to browser URLs by replacing hf://buckets/OWNER/NAME/PATH with https://huggingface.co/buckets/OWNER/NAME/resolve/PATH; for models, datasets, and spaces, use https://huggingface.co[/datasets|/spaces]/OWNER/NAME/resolve/main/PATH. URL-encode each path segment.'
 			: '';
 
-		/**
-		 *  we will set capabilities below. tool registrations automatically set tools: {listChanged: true}.
-		 */
 		const server = new McpServer(
 			{
 				name: '@huggingface/mcp-services',
@@ -235,106 +230,107 @@ export const createServerFactory = (_webServerInstance: WebServer, sharedApiClie
 			}
 		);
 
-		interface Tool {
-			enable(): void;
-			disable(): void;
-		}
-
 		const disabledTools = parseDisabledTools();
+		const selectedToolIds = new Set(toolSelection.enabledToolIds);
+		const shouldRegisterSelectedTool = (toolName: string) =>
+			selectedToolIds.has(toolName) && !disabledTools.has(toolName);
+		const shouldRegisterFixedTool = (toolName: string) => !disabledTools.has(toolName);
 
 		const rawNoImageHeader = headers?.['x-mcp-no-image-content'];
 		const noImageContentHeaderEnabled =
 			typeof rawNoImageHeader === 'string' && rawNoImageHeader.trim().toLowerCase() === 'true';
-
-		// Always register all tools and store instances for dynamic control
-		const toolInstances: { [name: string]: Tool } = {};
-		const fixedToolInstances: { [name: string]: Tool } = {};
 
 		const whoDescription = userDetails
 			? `Hugging Face tools are being used by authenticated user '${username}'`
 			: 'Hugging Face tools are being used anonymously and may be rate limited. Call this tool for instructions on joining and authenticating.';
 
 		const response = userDetails ? `You are authenticated as ${username ?? 'unknown'}.` : CONFIG_GUIDANCE;
-		fixedToolInstances.hf_whoami = server.registerTool(
-			'hf_whoami',
-			{
-				title: 'Hugging Face User Info',
-				description: whoDescription,
-				inputSchema: {},
-				annotations: { readOnlyHint: true, openWorldHint: false, title: 'Hugging Face User Info' },
-			},
-			() => {
-				return { content: [{ type: 'text', text: response }] };
-			}
-		);
+		if (shouldRegisterFixedTool('hf_whoami')) {
+			server.registerTool(
+				'hf_whoami',
+				{
+					title: 'Hugging Face User Info',
+					description: whoDescription,
+					inputSchema: {},
+					annotations: { readOnlyHint: true, openWorldHint: false, title: 'Hugging Face User Info' },
+				},
+				() => {
+					return { content: [{ type: 'text', text: response }] };
+				}
+			);
+		}
 
-		toolInstances[REPO_SEARCH_TOOL_CONFIG.name] = server.registerTool(
-			REPO_SEARCH_TOOL_CONFIG.name,
-			{
-				title: REPO_SEARCH_TOOL_CONFIG.annotations.title,
-				description: REPO_SEARCH_TOOL_CONFIG.description,
-				inputSchema: REPO_SEARCH_TOOL_CONFIG.schema.shape,
-				annotations: REPO_SEARCH_TOOL_CONFIG.annotations,
-			},
-			async (params: RepoSearchParams) => {
-				const result = await runWithQueryLogging(
-					logToolQuery,
-					{
-						methodName: REPO_SEARCH_TOOL_CONFIG.name,
-						query: params.query || `sort:${params.sort || 'trendingScore'}`,
-						parameters: params,
-						baseOptions: getLoggingOptions(),
-						successOptions: (formatted) => ({
-							totalResults: formatted.totalResults,
-							resultsShared: formatted.resultsShared,
-							responseCharCount: formatted.formatted.length,
-						}),
-					},
-					async () => {
-						const repoSearch = new RepoSearchTool(hfToken);
-						return repoSearch.searchWithParams(params);
-					}
-				);
-				return {
-					content: [{ type: 'text', text: result.formatted }],
-				};
-			}
-		);
+		if (shouldRegisterSelectedTool(REPO_SEARCH_TOOL_CONFIG.name)) {
+			server.registerTool(
+				REPO_SEARCH_TOOL_CONFIG.name,
+				{
+					title: REPO_SEARCH_TOOL_CONFIG.annotations.title,
+					description: REPO_SEARCH_TOOL_CONFIG.description,
+					inputSchema: REPO_SEARCH_TOOL_CONFIG.schema.shape,
+					annotations: REPO_SEARCH_TOOL_CONFIG.annotations,
+				},
+				async (params: RepoSearchParams) => {
+					const result = await runWithQueryLogging(
+						logToolQuery,
+						{
+							methodName: REPO_SEARCH_TOOL_CONFIG.name,
+							query: params.query || `sort:${params.sort || 'trendingScore'}`,
+							parameters: params,
+							baseOptions: getLoggingOptions(),
+							successOptions: (formatted) => ({
+								totalResults: formatted.totalResults,
+								resultsShared: formatted.resultsShared,
+								responseCharCount: formatted.formatted.length,
+							}),
+						},
+						async () => {
+							const repoSearch = new RepoSearchTool(hfToken);
+							return repoSearch.searchWithParams(params);
+						}
+					);
+					return {
+						content: [{ type: 'text', text: result.formatted }],
+					};
+				}
+			);
+		}
 
 		const createRepoToolConfig = CreateRepoTool.createToolConfig();
-		toolInstances[createRepoToolConfig.name] = server.registerTool(
-			createRepoToolConfig.name,
-			{
-				title: createRepoToolConfig.annotations.title,
-				description: createRepoToolConfig.description,
-				inputSchema: createRepoToolConfig.schema.shape,
-				outputSchema: createRepoToolConfig.outputSchema.shape,
-				annotations: createRepoToolConfig.annotations,
-			},
-			async (params: CreateRepoParams) => {
-				const result = await runWithQueryLogging(
-					logToolQuery,
-					{
-						methodName: createRepoToolConfig.name,
-						query: params.source_uri ? `duplicate:${params.source_uri}->${params.uri}` : `create:${params.uri}`,
-						parameters: params,
-						baseOptions: getLoggingOptions(),
-						successOptions: (created) => ({
-							resultsShared: 1,
-							responseCharCount: formatCreateRepoResult(created).length,
-						}),
-					},
-					async () => {
-						const createRepoTool = new CreateRepoTool(hfToken);
-						return createRepoTool.create(params);
-					}
-				);
-				return {
-					structuredContent: { ...result },
-					content: [{ type: 'text', text: formatCreateRepoResult(result) }],
-				};
-			}
-		);
+		if (shouldRegisterSelectedTool(createRepoToolConfig.name)) {
+			server.registerTool(
+				createRepoToolConfig.name,
+				{
+					title: createRepoToolConfig.annotations.title,
+					description: createRepoToolConfig.description,
+					inputSchema: createRepoToolConfig.schema.shape,
+					outputSchema: createRepoToolConfig.outputSchema.shape,
+					annotations: createRepoToolConfig.annotations,
+				},
+				async (params: CreateRepoParams) => {
+					const result = await runWithQueryLogging(
+						logToolQuery,
+						{
+							methodName: createRepoToolConfig.name,
+							query: params.source_uri ? `duplicate:${params.source_uri}->${params.uri}` : `create:${params.uri}`,
+							parameters: params,
+							baseOptions: getLoggingOptions(),
+							successOptions: (created) => ({
+								resultsShared: 1,
+								responseCharCount: formatCreateRepoResult(created).length,
+							}),
+						},
+						async () => {
+							const createRepoTool = new CreateRepoTool(hfToken);
+							return createRepoTool.create(params);
+						}
+					);
+					return {
+						structuredContent: { ...result },
+						content: [{ type: 'text', text: formatCreateRepoResult(result) }],
+					};
+				}
+			);
+		}
 
 		// Compute README availability; adjust description and schema accordingly
 		const hubInspectReadmeAllowed = hasReadmeFlag(toolSelection.enabledToolIds);
@@ -349,196 +345,201 @@ export const createServerFactory = (_webServerInstance: WebServer, sharedApiClie
 					return rest as unknown as z.ZodRawShape;
 				})();
 
-		toolInstances[HUB_REPO_DETAILS_TOOL_CONFIG.name] = server.registerTool(
-			HUB_REPO_DETAILS_TOOL_CONFIG.name,
-			{
-				description: hubInspectDescription,
-				inputSchema: hubInspectSchemaShape,
-				annotations: HUB_REPO_DETAILS_TOOL_CONFIG.annotations,
-			},
-			async (params: Record<string, unknown>) => {
-				// Re-evaluate flag dynamically to reflect UI changes without restarting server
-				const currentSelection = await toolSelectionStrategy.selectTools(toolSelectionContext);
-				const allowReadme = hasReadmeFlag(currentSelection.enabledToolIds);
-				const wantReadme = (params as { include_readme?: boolean }).include_readme === true; // explicit opt-in required
-				const includeReadme = allowReadme && wantReadme;
-
-				// Prepare safe logging parameters without relying on strong typing
-				const repoIdsParam = (params as { repo_ids?: unknown }).repo_ids;
-				const repoIds = Array.isArray(repoIdsParam)
-					? repoIdsParam.filter((repoId): repoId is string => typeof repoId === 'string')
-					: [];
-				const joinedRepoIds = repoIds.join(', ');
-				const loggedRepoIds = joinedRepoIds.length > 500 ? `${joinedRepoIds.slice(0, 497)}...` : joinedRepoIds;
-				const repoType = (params as { repo_type?: unknown }).repo_type as unknown;
-				const repoTypeSafe =
-					repoType === 'model' || repoType === 'dataset' || repoType === 'space' ? repoType : undefined;
-				const operationsParam = (params as { operations?: unknown }).operations;
-				const operations = Array.isArray(operationsParam)
-					? operationsParam.filter((operation): operation is string => typeof operation === 'string')
-					: undefined;
-				const config = (params as { config?: unknown }).config;
-				const split = (params as { split?: unknown }).split;
-				const offset = (params as { offset?: unknown }).offset;
-				const limit = (params as { limit?: unknown }).limit;
-
-				const result = await runWithQueryLogging(
-					logToolQuery,
-					{
-						methodName: HUB_REPO_DETAILS_TOOL_CONFIG.name,
-						query: loggedRepoIds,
-						parameters: {
-							repo_ids: repoIds,
-							count: repoIds.length,
-							repo_type: repoTypeSafe,
-							include_readme: includeReadme,
-							operations,
-							config: typeof config === 'string' ? config : undefined,
-							split: typeof split === 'string' ? split : undefined,
-							offset: typeof offset === 'number' ? offset : undefined,
-							limit: typeof limit === 'number' ? limit : undefined,
-						},
-						baseOptions: getLoggingOptions(),
-						successOptions: (details) => ({
-							totalResults: details.totalResults,
-							resultsShared: details.resultsShared,
-							responseCharCount: details.formatted.length,
-						}),
-					},
-					async () => {
-						const tool = new HubInspectTool(hfToken, undefined);
-						return tool.inspect(params as unknown as HubInspectParams, includeReadme);
-					}
-				);
-				return {
-					content: [{ type: 'text', text: result.formatted }],
-				};
-			}
-		);
-
-		const hfFsToolConfig = HF_FS_TOOL_CONFIG;
-		toolInstances[hfFsToolConfig.name] = server.registerTool(
-			hfFsToolConfig.name,
-			{
-				title: hfFsToolConfig.title,
-				description: hfFsToolConfig.description,
-				inputSchema: hfFsToolConfig.schema.shape,
-				outputSchema: hfFsToolConfig.outputSchema.shape,
-				annotations: hfFsToolConfig.annotations,
-			},
-			async (request: HfFsRequest) => {
-				const result = await runWithQueryLogging(
-					logToolQuery,
-					{
-						methodName: hfFsToolConfig.name,
-						query: [request.cmd, ...request.args].join(' '),
-						parameters: {
-							cmd: request.cmd,
-							args: request.args,
-						},
-						baseOptions: getLoggingOptions(),
-						successOptions: (fsResult) => {
-							const shared =
-								'entries' in fsResult ? fsResult.entries.length : fsResult.op === 'stat' && !fsResult.exists ? 0 : 1;
-							return {
-								totalResults: 'entries' in fsResult ? fsResult.entries.length : shared,
-								resultsShared: shared,
-								responseCharCount: formatHfFsMarkdown(fsResult).length,
-							};
-						},
-					},
-					async () => {
-						const tool = new HfFsTool(hfToken, undefined);
-						return await tool.run(request);
-					}
-				);
-				return {
-					structuredContent: { ...result },
-					content: [{ type: 'text', text: formatHfFsMarkdown(result) }],
-				};
-			}
-		);
-
-		if (hfToken && toolSelection.enabledToolIds.includes(HF_FILES_FLAG)) {
-			const hfFsWriteToolConfig = HfFsWriteTool.createToolConfig();
-			fixedToolInstances[hfFsWriteToolConfig.name] = server.registerTool(
-				hfFsWriteToolConfig.name,
+		if (shouldRegisterSelectedTool(HUB_REPO_DETAILS_TOOL_CONFIG.name)) {
+			server.registerTool(
+				HUB_REPO_DETAILS_TOOL_CONFIG.name,
 				{
-					title: hfFsWriteToolConfig.title,
-					description: hfFsWriteToolConfig.description,
-					inputSchema: hfFsWriteToolConfig.schema.shape,
-					outputSchema: hfFsWriteToolConfig.outputSchema.shape,
-					annotations: hfFsWriteToolConfig.annotations,
+					description: hubInspectDescription,
+					inputSchema: hubInspectSchemaShape,
+					annotations: HUB_REPO_DETAILS_TOOL_CONFIG.annotations,
 				},
-				async (request: HfFsWriteRequest) => {
+				async (params: Record<string, unknown>) => {
+					const wantReadme = (params as { include_readme?: boolean }).include_readme === true; // explicit opt-in required
+					const includeReadme = hubInspectReadmeAllowed && wantReadme;
+
+					// Prepare safe logging parameters without relying on strong typing
+					const repoIdsParam = (params as { repo_ids?: unknown }).repo_ids;
+					const repoIds = Array.isArray(repoIdsParam)
+						? repoIdsParam.filter((repoId): repoId is string => typeof repoId === 'string')
+						: [];
+					const joinedRepoIds = repoIds.join(', ');
+					const loggedRepoIds = joinedRepoIds.length > 500 ? `${joinedRepoIds.slice(0, 497)}...` : joinedRepoIds;
+					const repoType = (params as { repo_type?: unknown }).repo_type as unknown;
+					const repoTypeSafe =
+						repoType === 'model' || repoType === 'dataset' || repoType === 'space' ? repoType : undefined;
+					const operationsParam = (params as { operations?: unknown }).operations;
+					const operations = Array.isArray(operationsParam)
+						? operationsParam.filter((operation): operation is string => typeof operation === 'string')
+						: undefined;
+					const config = (params as { config?: unknown }).config;
+					const split = (params as { split?: unknown }).split;
+					const offset = (params as { offset?: unknown }).offset;
+					const limit = (params as { limit?: unknown }).limit;
+
 					const result = await runWithQueryLogging(
 						logToolQuery,
 						{
-							methodName: hfFsWriteToolConfig.name,
-							query: [request.cmd, ...request.args].join(' '),
+							methodName: HUB_REPO_DETAILS_TOOL_CONFIG.name,
+							query: loggedRepoIds,
 							parameters: {
-								cmd: request.cmd,
-								args: request.args,
-								content_type:
-									request.cmd === 'put' ? (request.args.includes('--base64') ? 'base64' : 'text') : undefined,
+								repo_ids: repoIds,
+								count: repoIds.length,
+								repo_type: repoTypeSafe,
+								include_readme: includeReadme,
+								operations,
+								config: typeof config === 'string' ? config : undefined,
+								split: typeof split === 'string' ? split : undefined,
+								offset: typeof offset === 'number' ? offset : undefined,
+								limit: typeof limit === 'number' ? limit : undefined,
 							},
 							baseOptions: getLoggingOptions(),
-							successOptions: (writeResult) => ({
-								totalResults: 1,
-								resultsShared: 1,
-								responseCharCount: formatHfFsWriteMarkdown(writeResult).length,
+							successOptions: (details) => ({
+								totalResults: details.totalResults,
+								resultsShared: details.resultsShared,
+								responseCharCount: details.formatted.length,
 							}),
 						},
 						async () => {
-							const tool = new HfFsWriteTool(hfToken, undefined);
-							return await tool.run(request);
+							const tool = new HubInspectTool(hfToken, undefined);
+							return tool.inspect(params as unknown as HubInspectParams, includeReadme);
 						}
 					);
 					return {
-						structuredContent: { ...result },
-						content: [{ type: 'text', text: formatHfFsWriteMarkdown(result) }],
+						content: [{ type: 'text', text: result.formatted }],
 					};
 				}
 			);
 		}
 
-		toolInstances[HF_JOBS_TOOL_CONFIG.name] = server.registerTool(
-			HF_JOBS_TOOL_CONFIG.name,
-			{
-				title: HF_JOBS_TOOL_CONFIG.annotations.title,
-				description: HF_JOBS_TOOL_CONFIG.description,
-				inputSchema: HF_JOBS_TOOL_CONFIG.schema.shape,
-				annotations: HF_JOBS_TOOL_CONFIG.annotations,
-			},
-			async (params: z.infer<typeof HF_JOBS_TOOL_CONFIG.schema>) => {
-				// Jobs require authentication - check if user has token
-				const isAuthenticated = !!hfToken;
-				const loggedOperation = params.operation ?? 'no-operation';
-				const result = await runWithQueryLogging(
-					logToolQuery,
+		const hfFsToolConfig = HF_FS_TOOL_CONFIG;
+		if (shouldRegisterSelectedTool(hfFsToolConfig.name)) {
+			server.registerTool(
+				hfFsToolConfig.name,
+				{
+					title: hfFsToolConfig.title,
+					description: hfFsToolConfig.description,
+					inputSchema: hfFsToolConfig.schema.shape,
+					outputSchema: hfFsToolConfig.outputSchema.shape,
+					annotations: hfFsToolConfig.annotations,
+				},
+				async (request: HfFsRequest) => {
+					const result = await runWithQueryLogging(
+						logToolQuery,
+						{
+							methodName: hfFsToolConfig.name,
+							query: [request.cmd, ...request.args].join(' '),
+							parameters: {
+								cmd: request.cmd,
+								args: request.args,
+							},
+							baseOptions: getLoggingOptions(),
+							successOptions: (fsResult) => {
+								const shared =
+									'entries' in fsResult ? fsResult.entries.length : fsResult.op === 'stat' && !fsResult.exists ? 0 : 1;
+								return {
+									totalResults: 'entries' in fsResult ? fsResult.entries.length : shared,
+									resultsShared: shared,
+									responseCharCount: formatHfFsMarkdown(fsResult).length,
+								};
+							},
+						},
+						async () => {
+							const tool = new HfFsTool(hfToken, undefined);
+							return await tool.run(request);
+						}
+					);
+					return {
+						structuredContent: { ...result },
+						content: [{ type: 'text', text: formatHfFsMarkdown(result) }],
+					};
+				}
+			);
+		}
+
+		if (hfToken && toolSelection.enabledToolIds.includes(HF_FILES_FLAG)) {
+			const hfFsWriteToolConfig = HfFsWriteTool.createToolConfig();
+			if (shouldRegisterFixedTool(hfFsWriteToolConfig.name)) {
+				server.registerTool(
+					hfFsWriteToolConfig.name,
 					{
-						methodName: HF_JOBS_TOOL_CONFIG.name,
-						query: loggedOperation,
-						parameters: params.args || {},
-						baseOptions: getLoggingOptions(),
-						successOptions: (jobResult) => ({
-							totalResults: jobResult.totalResults,
-							resultsShared: jobResult.resultsShared,
-							responseCharCount: jobResult.formatted.length,
-						}),
+						title: hfFsWriteToolConfig.title,
+						description: hfFsWriteToolConfig.description,
+						inputSchema: hfFsWriteToolConfig.schema.shape,
+						outputSchema: hfFsWriteToolConfig.outputSchema.shape,
+						annotations: hfFsWriteToolConfig.annotations,
 					},
-					async () => {
-						const jobsTool = new HfJobsTool(hfToken, isAuthenticated, username);
-						return jobsTool.execute(params);
+					async (request: HfFsWriteRequest) => {
+						const result = await runWithQueryLogging(
+							logToolQuery,
+							{
+								methodName: hfFsWriteToolConfig.name,
+								query: [request.cmd, ...request.args].join(' '),
+								parameters: {
+									cmd: request.cmd,
+									args: request.args,
+									content_type:
+										request.cmd === 'put' ? (request.args.includes('--base64') ? 'base64' : 'text') : undefined,
+								},
+								baseOptions: getLoggingOptions(),
+								successOptions: (writeResult) => ({
+									totalResults: 1,
+									resultsShared: 1,
+									responseCharCount: formatHfFsWriteMarkdown(writeResult).length,
+								}),
+							},
+							async () => {
+								const tool = new HfFsWriteTool(hfToken, undefined);
+								return await tool.run(request);
+							}
+						);
+						return {
+							structuredContent: { ...result },
+							content: [{ type: 'text', text: formatHfFsWriteMarkdown(result) }],
+						};
 					}
 				);
-
-				return {
-					content: [{ type: 'text', text: result.formatted }],
-					...(result.isError && { isError: true }),
-				};
 			}
-		);
+		}
+
+		if (shouldRegisterSelectedTool(HF_JOBS_TOOL_CONFIG.name)) {
+			server.registerTool(
+				HF_JOBS_TOOL_CONFIG.name,
+				{
+					title: HF_JOBS_TOOL_CONFIG.annotations.title,
+					description: HF_JOBS_TOOL_CONFIG.description,
+					inputSchema: HF_JOBS_TOOL_CONFIG.schema.shape,
+					annotations: HF_JOBS_TOOL_CONFIG.annotations,
+				},
+				async (params: z.infer<typeof HF_JOBS_TOOL_CONFIG.schema>) => {
+					// Jobs require authentication - check if user has token
+					const isAuthenticated = !!hfToken;
+					const loggedOperation = params.operation ?? 'no-operation';
+					const result = await runWithQueryLogging(
+						logToolQuery,
+						{
+							methodName: HF_JOBS_TOOL_CONFIG.name,
+							query: loggedOperation,
+							parameters: params.args || {},
+							baseOptions: getLoggingOptions(),
+							successOptions: (jobResult) => ({
+								totalResults: jobResult.totalResults,
+								resultsShared: jobResult.resultsShared,
+								responseCharCount: jobResult.formatted.length,
+							}),
+						},
+						async () => {
+							const jobsTool = new HfJobsTool(hfToken, isAuthenticated, username);
+							return jobsTool.execute(params);
+						}
+					);
+
+					return {
+						content: [{ type: 'text', text: result.formatted }],
+						...(result.isError && { isError: true }),
+					};
+				}
+			);
+		}
 
 		const SANDBOX_REDACTED_KEYS = ['args', 'handle', 'sandbox_token', 'text', 'base64', 'stdin', 'body', 'env'];
 		const redactSandboxParameters = (args: Record<string, unknown> | undefined): Record<string, unknown> => {
@@ -608,264 +609,272 @@ export const createServerFactory = (_webServerInstance: WebServer, sharedApiClie
 		};
 
 		const sandboxToolConfig = HfSandboxTool.createToolConfig(username);
-		toolInstances[sandboxToolConfig.name] = server.registerTool(
-			sandboxToolConfig.name,
-			{
-				title: sandboxToolConfig.title,
-				description: sandboxToolConfig.description,
-				inputSchema: sandboxToolConfig.schema.shape,
-				outputSchema: sandboxToolConfig.outputSchema.shape,
-				annotations: sandboxToolConfig.annotations,
-			},
-			async (params: HfSandboxParams, extra) => {
-				const isAuthenticated = !!hfToken;
-				const onProgress = createSandboxProgressRelay(extra);
-				const result = await runWithQueryLogging(
-					logToolQuery,
-					{
-						methodName: sandboxToolConfig.name,
-						query: params.cmd,
-						parameters: redactSandboxParameters(params),
-						baseOptions: getLoggingOptions(),
-						successOptions: (sandboxResult) => ({
-							totalResults: 1,
-							resultsShared: 1,
-							responseCharCount: formatSandboxMarkdown(sandboxResult).length,
-						}),
-					},
-					async () => {
-						const sandboxTool = new HfSandboxTool(hfToken, isAuthenticated, username);
-						return sandboxTool.run(params, onProgress ? { onProgress } : undefined);
-					}
-				);
+		if (shouldRegisterSelectedTool(sandboxToolConfig.name)) {
+			server.registerTool(
+				sandboxToolConfig.name,
+				{
+					title: sandboxToolConfig.title,
+					description: sandboxToolConfig.description,
+					inputSchema: sandboxToolConfig.schema.shape,
+					outputSchema: sandboxToolConfig.outputSchema.shape,
+					annotations: sandboxToolConfig.annotations,
+				},
+				async (params: HfSandboxParams, extra) => {
+					const isAuthenticated = !!hfToken;
+					const onProgress = createSandboxProgressRelay(extra);
+					const result = await runWithQueryLogging(
+						logToolQuery,
+						{
+							methodName: sandboxToolConfig.name,
+							query: params.cmd,
+							parameters: redactSandboxParameters(params),
+							baseOptions: getLoggingOptions(),
+							successOptions: (sandboxResult) => ({
+								totalResults: 1,
+								resultsShared: 1,
+								responseCharCount: formatSandboxMarkdown(sandboxResult).length,
+							}),
+						},
+						async () => {
+							const sandboxTool = new HfSandboxTool(hfToken, isAuthenticated, username);
+							return sandboxTool.run(params, onProgress ? { onProgress } : undefined);
+						}
+					);
 
-				return {
-					structuredContent: { ...result },
-					content: [{ type: 'text', text: formatSandboxMarkdown(result) }],
-				};
-			}
-		);
+					return {
+						structuredContent: { ...result },
+						content: [{ type: 'text', text: formatSandboxMarkdown(result) }],
+					};
+				}
+			);
+		}
 
 		const sandboxExecToolConfig = HfSandboxExecTool.createToolConfig(username);
-		toolInstances[sandboxExecToolConfig.name] = server.registerTool(
-			sandboxExecToolConfig.name,
-			{
-				title: sandboxExecToolConfig.title,
-				description: sandboxExecToolConfig.description,
-				inputSchema: sandboxExecToolConfig.schema.shape,
-				outputSchema: sandboxExecToolConfig.outputSchema.shape,
-				annotations: sandboxExecToolConfig.annotations,
-			},
-			async (params: HfSandboxExecParams, extra) => {
-				const isAuthenticated = !!hfToken;
-				const onProgress = createSandboxProgressRelay(extra);
-				const result = await runWithQueryLogging(
-					logToolQuery,
-					{
-						methodName: sandboxExecToolConfig.name,
-						query: params.cmd,
-						parameters: redactSandboxParameters(params),
-						baseOptions: getLoggingOptions(),
-						successOptions: (execResult) => ({
-							totalResults: 1,
-							resultsShared: 1,
-							responseCharCount: formatSandboxExecMarkdown(execResult).length,
-						}),
-					},
-					async () => {
-						const sandboxExecTool = new HfSandboxExecTool(hfToken, isAuthenticated, username);
-						return sandboxExecTool.run(params, onProgress ? { onProgress } : undefined);
-					}
-				);
+		if (shouldRegisterSelectedTool(sandboxExecToolConfig.name)) {
+			server.registerTool(
+				sandboxExecToolConfig.name,
+				{
+					title: sandboxExecToolConfig.title,
+					description: sandboxExecToolConfig.description,
+					inputSchema: sandboxExecToolConfig.schema.shape,
+					outputSchema: sandboxExecToolConfig.outputSchema.shape,
+					annotations: sandboxExecToolConfig.annotations,
+				},
+				async (params: HfSandboxExecParams, extra) => {
+					const isAuthenticated = !!hfToken;
+					const onProgress = createSandboxProgressRelay(extra);
+					const result = await runWithQueryLogging(
+						logToolQuery,
+						{
+							methodName: sandboxExecToolConfig.name,
+							query: params.cmd,
+							parameters: redactSandboxParameters(params),
+							baseOptions: getLoggingOptions(),
+							successOptions: (execResult) => ({
+								totalResults: 1,
+								resultsShared: 1,
+								responseCharCount: formatSandboxExecMarkdown(execResult).length,
+							}),
+						},
+						async () => {
+							const sandboxExecTool = new HfSandboxExecTool(hfToken, isAuthenticated, username);
+							return sandboxExecTool.run(params, onProgress ? { onProgress } : undefined);
+						}
+					);
 
-				return {
-					structuredContent: { ...result },
-					content: [{ type: 'text', text: formatSandboxExecMarkdown(result) }],
-				};
-			}
-		);
+					return {
+						structuredContent: { ...result },
+						content: [{ type: 'text', text: formatSandboxExecMarkdown(result) }],
+					};
+				}
+			);
+		}
 
 		const sandboxFsToolConfig = HfSandboxFsTool.createToolConfig(username);
-		toolInstances[sandboxFsToolConfig.name] = server.registerTool(
-			sandboxFsToolConfig.name,
-			{
-				title: sandboxFsToolConfig.title,
-				description: sandboxFsToolConfig.description,
-				inputSchema: sandboxFsToolConfig.schema.shape,
-				outputSchema: sandboxFsToolConfig.outputSchema.shape,
-				annotations: sandboxFsToolConfig.annotations,
-			},
-			async (params: HfSandboxFsParams) => {
-				const isAuthenticated = !!hfToken;
-				const result = await runWithQueryLogging(
-					logToolQuery,
-					{
-						methodName: sandboxFsToolConfig.name,
-						query: params.cmd,
-						parameters: redactSandboxParameters(params),
-						baseOptions: getLoggingOptions(),
-						successOptions: (fsResult) => ({
-							totalResults: 1,
-							resultsShared: 1,
-							responseCharCount: formatSandboxFsMarkdown(fsResult).length,
-						}),
-					},
-					async () => {
-						const sandboxFsTool = new HfSandboxFsTool(hfToken, isAuthenticated, username);
-						return sandboxFsTool.run(params);
-					}
-				);
+		if (shouldRegisterSelectedTool(sandboxFsToolConfig.name)) {
+			server.registerTool(
+				sandboxFsToolConfig.name,
+				{
+					title: sandboxFsToolConfig.title,
+					description: sandboxFsToolConfig.description,
+					inputSchema: sandboxFsToolConfig.schema.shape,
+					outputSchema: sandboxFsToolConfig.outputSchema.shape,
+					annotations: sandboxFsToolConfig.annotations,
+				},
+				async (params: HfSandboxFsParams) => {
+					const isAuthenticated = !!hfToken;
+					const result = await runWithQueryLogging(
+						logToolQuery,
+						{
+							methodName: sandboxFsToolConfig.name,
+							query: params.cmd,
+							parameters: redactSandboxParameters(params),
+							baseOptions: getLoggingOptions(),
+							successOptions: (fsResult) => ({
+								totalResults: 1,
+								resultsShared: 1,
+								responseCharCount: formatSandboxFsMarkdown(fsResult).length,
+							}),
+						},
+						async () => {
+							const sandboxFsTool = new HfSandboxFsTool(hfToken, isAuthenticated, username);
+							return sandboxFsTool.run(params);
+						}
+					);
 
-				return {
-					structuredContent: { ...result },
-					content: [{ type: 'text', text: formatSandboxFsMarkdown(result) }],
-				};
-			}
-		);
+					return {
+						structuredContent: { ...result },
+						content: [{ type: 'text', text: formatSandboxFsMarkdown(result) }],
+					};
+				}
+			);
+		}
 
 		// Get dynamic config based on environment (uses DYNAMIC_SPACE_DATA env var)
 		const dynamicSpaceToolConfig = getDynamicSpaceToolConfig();
-		toolInstances[dynamicSpaceToolConfig.name] = server.registerTool(
-			dynamicSpaceToolConfig.name,
-			{
-				title: dynamicSpaceToolConfig.annotations.title,
-				description: dynamicSpaceToolConfig.description,
-				inputSchema: dynamicSpaceToolConfig.schema.shape,
-				annotations: dynamicSpaceToolConfig.annotations,
-			},
-			async (params: SpaceArgs, extra) => {
-				// Check if invoke operation is disabled by gradio=none
-				const { gradio } = extractAuthBouquetAndMix(headers);
-				if (params.operation === 'invoke' && gradio === 'none') {
-					const errorMessage =
-						'The invoke operation is disabled because gradio=none is set. ' +
-						'To use invoke, remove gradio=none from your headers or set gradio to a space ID. ' +
-						`You can still use operation=${VIEW_PARAMETERS} to inspect the tool schema.`;
-					return {
-						content: [{ type: 'text', text: errorMessage }],
-						isError: true,
-					};
-				}
+		if (shouldRegisterSelectedTool(dynamicSpaceToolConfig.name)) {
+			server.registerTool(
+				dynamicSpaceToolConfig.name,
+				{
+					title: dynamicSpaceToolConfig.annotations.title,
+					description: dynamicSpaceToolConfig.description,
+					inputSchema: dynamicSpaceToolConfig.schema.shape,
+					annotations: dynamicSpaceToolConfig.annotations,
+				},
+				async (params: SpaceArgs, extra) => {
+					// Check if invoke operation is disabled by gradio=none
+					const { gradio } = extractAuthBouquetAndMix(headers);
+					if (params.operation === 'invoke' && gradio === 'none') {
+						const errorMessage =
+							'The invoke operation is disabled because gradio=none is set. ' +
+							'To use invoke, remove gradio=none from your headers or set gradio to a space ID. ' +
+							`You can still use operation=${VIEW_PARAMETERS} to inspect the tool schema.`;
+						return {
+							content: [{ type: 'text', text: errorMessage }],
+							isError: true,
+						};
+					}
 
-				const loggedOperation = params.operation ?? 'no-operation';
+					const loggedOperation = params.operation ?? 'no-operation';
 
-				if (params.operation === 'invoke') {
-					const startTime = Date.now();
-					let success = false;
+					if (params.operation === 'invoke') {
+						const startTime = Date.now();
+						let success = false;
 
-					try {
-						const spaceTool = new SpaceTool(hfToken);
-						const result = await spaceTool.execute(params, extra);
+						try {
+							const spaceTool = new SpaceTool(hfToken);
+							const result = await spaceTool.execute(params, extra);
 
-						if ('result' in result && result.result) {
-							const invokeResult = result as InvokeResult;
-							success = !invokeResult.isError;
+							if ('result' in result && result.result) {
+								const invokeResult = result as InvokeResult;
+								success = !invokeResult.isError;
 
-							const stripImageContent =
-								noImageContentHeaderEnabled || toolSelection.enabledToolIds.includes('NO_GRADIO_IMAGE_CONTENT');
-							const postProcessOptions: GradioToolCallOptions = {
-								stripImageContent,
-								toolName: dynamicSpaceToolConfig.name,
-								outwardFacingName: dynamicSpaceToolConfig.name,
-								sessionInfo,
-								spaceName: params.space_name,
-							};
+								const stripImageContent =
+									noImageContentHeaderEnabled || toolSelection.enabledToolIds.includes('NO_GRADIO_IMAGE_CONTENT');
+								const postProcessOptions: GradioToolCallOptions = {
+									stripImageContent,
+									toolName: dynamicSpaceToolConfig.name,
+									outwardFacingName: dynamicSpaceToolConfig.name,
+									sessionInfo,
+									spaceName: params.space_name,
+								};
 
-							const processedResult = applyResultPostProcessing(
-								invokeResult.result as CallToolResult,
-								postProcessOptions
-							);
+								const processedResult = applyResultPostProcessing(
+									invokeResult.result as CallToolResult,
+									postProcessOptions
+								);
 
-							const warningsContent =
-								invokeResult.warnings.length > 0
-									? [
-											{
-												type: 'text' as const,
-												text:
-													(invokeResult.warnings.length === 1 ? 'Warning:\n' : 'Warnings:\n') +
-													invokeResult.warnings.map((w) => `- ${w}`).join('\n') +
-													'\n',
-											},
-										]
-									: [];
+								const warningsContent =
+									invokeResult.warnings.length > 0
+										? [
+												{
+													type: 'text' as const,
+													text:
+														(invokeResult.warnings.length === 1 ? 'Warning:\n' : 'Warnings:\n') +
+														invokeResult.warnings.map((w) => `- ${w}`).join('\n') +
+														'\n',
+												},
+											]
+										: [];
+
+								const durationMs = Date.now() - startTime;
+								const responseContent = [...warningsContent, ...(processedResult.content as unknown[])];
+								logGradioEvent(params.space_name || 'unknown-space', sessionInfo?.clientSessionId || 'unknown', {
+									durationMs,
+									isAuthenticated: !!hfToken,
+									clientName: sessionInfo?.clientInfo?.name,
+									clientVersion: sessionInfo?.clientInfo?.version,
+									success,
+									error: invokeResult.isError ? JSON.stringify(responseContent) : undefined,
+									responseSizeBytes: JSON.stringify(responseContent).length,
+									isDynamic: true,
+								});
+
+								return {
+									content: responseContent,
+									...(invokeResult.isError && { isError: true }),
+								} as CallToolResult;
+							}
+
+							const toolResult = result as ToolResult;
+							success = !toolResult.isError;
 
 							const durationMs = Date.now() - startTime;
-							const responseContent = [...warningsContent, ...(processedResult.content as unknown[])];
+							logToolQuery(dynamicSpaceToolConfig.name, loggedOperation, params, {
+								...getLoggingOptions(),
+								totalResults: toolResult.totalResults,
+								resultsShared: toolResult.resultsShared,
+								responseCharCount: toolResult.formatted.length,
+								durationMs,
+								success,
+							});
+
+							return {
+								content: [{ type: 'text', text: toolResult.formatted }],
+								...(toolResult.isError && { isError: true }),
+							};
+						} catch (err) {
+							const durationMs = Date.now() - startTime;
 							logGradioEvent(params.space_name || 'unknown-space', sessionInfo?.clientSessionId || 'unknown', {
 								durationMs,
 								isAuthenticated: !!hfToken,
 								clientName: sessionInfo?.clientInfo?.name,
 								clientVersion: sessionInfo?.clientInfo?.version,
-								success,
-								error: invokeResult.isError ? JSON.stringify(responseContent) : undefined,
-								responseSizeBytes: JSON.stringify(responseContent).length,
+								success: false,
+								error: err,
 								isDynamic: true,
 							});
-
-							return {
-								content: responseContent,
-								...(invokeResult.isError && { isError: true }),
-							} as CallToolResult;
+							throw err;
 						}
-
-						const toolResult = result as ToolResult;
-						success = !toolResult.isError;
-
-						const durationMs = Date.now() - startTime;
-						logToolQuery(dynamicSpaceToolConfig.name, loggedOperation, params, {
-							...getLoggingOptions(),
-							totalResults: toolResult.totalResults,
-							resultsShared: toolResult.resultsShared,
-							responseCharCount: toolResult.formatted.length,
-							durationMs,
-							success,
-						});
-
-						return {
-							content: [{ type: 'text', text: toolResult.formatted }],
-							...(toolResult.isError && { isError: true }),
-						};
-					} catch (err) {
-						const durationMs = Date.now() - startTime;
-						logGradioEvent(params.space_name || 'unknown-space', sessionInfo?.clientSessionId || 'unknown', {
-							durationMs,
-							isAuthenticated: !!hfToken,
-							clientName: sessionInfo?.clientInfo?.name,
-							clientVersion: sessionInfo?.clientInfo?.version,
-							success: false,
-							error: err,
-							isDynamic: true,
-						});
-						throw err;
 					}
+
+					const toolResult = await runWithQueryLogging(
+						logToolQuery,
+						{
+							methodName: dynamicSpaceToolConfig.name,
+							query: loggedOperation,
+							parameters: params,
+							baseOptions: getLoggingOptions(),
+							successOptions: (result) => ({
+								totalResults: result.totalResults,
+								resultsShared: result.resultsShared,
+								responseCharCount: result.formatted.length,
+							}),
+						},
+						async () => {
+							const spaceTool = new SpaceTool(hfToken);
+							const result = await spaceTool.execute(params, extra);
+							return result as ToolResult;
+						}
+					);
+
+					return {
+						content: [{ type: 'text', text: toolResult.formatted }],
+						...(toolResult.isError && { isError: true }),
+					};
 				}
-
-				const toolResult = await runWithQueryLogging(
-					logToolQuery,
-					{
-						methodName: dynamicSpaceToolConfig.name,
-						query: loggedOperation,
-						parameters: params,
-						baseOptions: getLoggingOptions(),
-						successOptions: (result) => ({
-							totalResults: result.totalResults,
-							resultsShared: result.resultsShared,
-							responseCharCount: result.formatted.length,
-						}),
-					},
-					async () => {
-						const spaceTool = new SpaceTool(hfToken);
-						const result = await spaceTool.execute(params, extra);
-						return result as ToolResult;
-					}
-				);
-
-				return {
-					content: [{ type: 'text', text: toolResult.formatted }],
-					...(toolResult.isError && { isError: true }),
-				};
-			}
-		);
+			);
+		}
 
 		// Register Gradio widget resource for OpenAI MCP client (skybridge)
 		if (sessionInfo?.clientInfo?.name === 'openai-mcp') {
@@ -888,78 +897,21 @@ export const createServerFactory = (_webServerInstance: WebServer, sharedApiClie
 			registerSkillResources(server, skillCatalog);
 		}
 
-		// Declare the function to apply tool states (we only need to call it if we are
-		// applying the tool states either because we have a Gradio tool call (grNN_) or
-		// we are responding to a ListToolsRequest). This also helps if there is a
-		// mismatch between Client cache state and desired states for these specific tools.
-		// NB: That may not always be the case, consider carefully whether you want a tool
-		// included in the skipGradio check.
-		const applyToolStates = async () => {
-			logger.info(
-				{
-					mode: toolSelection.mode,
-					reason: toolSelection.reason,
-					enabledCount: toolSelection.enabledToolIds.length,
-					totalTools: Object.keys(toolInstances).length,
-					mixedBouquet: toolSelection.mixedBouquet?.join(','),
-				},
-				'Tool selection strategy applied'
-			);
+		logger.info(
+			{
+				mode: toolSelection.mode,
+				reason: toolSelection.reason,
+				enabledCount: toolSelection.enabledToolIds.length,
+				mixedBouquet: toolSelection.mixedBouquet?.join(','),
+			},
+			'Immutable tool selection applied'
+		);
 
-			// Apply the desired state to each tool (tools start enabled by default)
-			for (const [toolName, toolInstance] of Object.entries(toolInstances)) {
-				if (disabledTools.has(toolName)) {
-					toolInstance.disable();
-				} else if (toolSelection.enabledToolIds.includes(toolName)) {
-					toolInstance.enable();
-				} else {
-					toolInstance.disable();
-				}
-			}
-		};
-
-		for (const [toolName, toolInstance] of Object.entries({ ...toolInstances, ...fixedToolInstances })) {
-			disableConfiguredTool(toolName, toolInstance, disabledTools);
-		}
-
-		// Always register capabilities consistently for stateless vs stateful modes
-		const transportInfo = sharedApiClient.getTransportInfo();
-
-		registerCapabilities(server, sharedApiClient, {
+		registerCapabilities(server, {
 			hasResources: !clientDenied && sessionInfo?.clientInfo?.name === 'openai-mcp',
 			hasSkills,
 		});
 
-		if (!skipGradio) {
-			void applyToolStates();
-
-			if (!transportInfo?.jsonResponseEnabled && !transportInfo?.externalApiMode) {
-				// Set up event listener for dynamic tool state changes
-				const toolStateChangeHandler = (toolId: string, enabled: boolean) => {
-					const toolInstance = toolInstances[toolId];
-					if (toolInstance) {
-						if (disabledTools.has(toolId)) {
-							toolInstance.disable();
-						} else if (toolId === HF_FS_TOOL_ID) {
-							toolInstance.enable();
-						} else if (enabled && (hfToken || isBuiltInToolVisibleAnonymously(toolId))) {
-							toolInstance.enable();
-						} else {
-							toolInstance.disable();
-						}
-						logger.debug({ toolId, enabled }, 'Applied single tool state change');
-					}
-				};
-
-				sharedApiClient.on('toolStateChange', toolStateChangeHandler);
-
-				// Clean up event listener when server closes
-				server.server.onclose = () => {
-					sharedApiClient.removeListener('toolStateChange', toolStateChangeHandler);
-					logger.debug('Removed toolStateChange listener for closed server');
-				};
-			}
-		}
 		return { server, userDetails, enabledToolIds: toolSelection.enabledToolIds };
 	};
 };

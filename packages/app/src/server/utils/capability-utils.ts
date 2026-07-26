@@ -1,6 +1,5 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ServerCapabilities } from '@modelcontextprotocol/sdk/types.js';
-import type { McpApiClient } from './mcp-api-client.js';
 
 interface RegisterCapabilitiesOptions {
 	/**
@@ -21,24 +20,16 @@ interface RegisterCapabilitiesOptions {
  *
  * This utility function handles:
  * - Configuring tools and resources capabilities
- * - Determining listChanged flags based on transport mode
- *
  * @param server - The McpServer instance to register capabilities on
- * @param sharedApiClient - The shared API client for transport info
  * @param options - Configuration options for capabilities
  */
-export function registerCapabilities(
-	server: McpServer,
-	sharedApiClient: McpApiClient,
-	options: RegisterCapabilitiesOptions = {}
-): void {
-	const transportInfo = sharedApiClient.getTransportInfo();
+export function registerCapabilities(server: McpServer, options: RegisterCapabilitiesOptions = {}): void {
 	const { hasResources = false, hasSkills = false } = options;
 	const advertiseResources = hasResources || hasSkills;
 
 	const capabilities: ServerCapabilities = {
 		tools: {
-			listChanged: !transportInfo?.jsonResponseEnabled,
+			listChanged: false,
 		},
 		...(advertiseResources
 			? {

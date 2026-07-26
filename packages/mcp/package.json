@@ -7,7 +7,6 @@
 	"exports": {
 		".": {
 			"types": "./dist/index.d.ts",
-			"browser": "./dist/index.browser.js",
 			"default": "./dist/index.js"
 		},
 		"./network": {

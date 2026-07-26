@@ -1,12 +1,20 @@
 import { logger } from './logger.js';
 import type { AppSettings, SpaceTool } from '../../shared/settings.js';
-import { ALL_BUILTIN_TOOL_IDS, HF_FS_TOOL_ID, HUB_REPO_DETAILS_TOOL_ID, REPO_SEARCH_TOOL_ID } from '@llmindset/hf-mcp';
+import {
+	ALL_BUILTIN_TOOL_IDS,
+	HF_FILES_FLAG,
+	HF_FS_TOOL_ID,
+	HUB_REPO_DETAILS_TOOL_ID,
+	REPO_SEARCH_TOOL_ID,
+	TOOL_ID_GROUPS,
+} from '@llmindset/hf-mcp';
 import type { McpApiClient } from './mcp-api-client.js';
 import { extractAuthBouquetAndMix } from '../utils/auth-utils.js';
 import { normalizeBuiltInTools } from '../../shared/tool-normalizer.js';
 import { BOUQUETS } from '../../shared/bouquet-presets.js';
 import { parseGradioSpaceIds } from './gradio-utils.js';
 import { getProxyToolsConfig } from './proxy-tools-config.js';
+import { GRADIO_IMAGE_FILTER_FLAG, README_INCLUDE_FLAG } from '../../shared/behavior-flags.js';
 
 export enum ToolSelectionMode {
 	BOUQUET_OVERRIDE = 'bouquet_override',
@@ -143,6 +151,22 @@ export class ToolSelectionStrategy {
 			return enabledToolIds;
 		}
 		return [...new Set([...normalizeBuiltInTools(enabledToolIds), ...proxyToolNames])];
+	}
+
+	private filterSupportedConfigIds(ids: string[]): string[] {
+		const supportedIds = new Set<string>([
+			...ALL_BUILTIN_TOOL_IDS,
+			...TOOL_ID_GROUPS.sandbox,
+			HF_FILES_FLAG,
+			README_INCLUDE_FLAG,
+			GRADIO_IMAGE_FILTER_FLAG,
+			...this.getProxyToolNames(),
+		]);
+		const unsupportedIds = ids.filter((id) => !supportedIds.has(id));
+		if (unsupportedIds.length > 0) {
+			logger.warn({ unsupportedIds: [...new Set(unsupportedIds)] }, 'Ignoring unsupported tool configuration IDs');
+		}
+		return ids.filter((id) => supportedIds.has(id));
 	}
 
 	private applyAuthVisibility(enabledToolIds: string[], hfToken?: string): string[] {
@@ -309,7 +333,10 @@ export class ToolSelectionStrategy {
 		// Use provided user settings (from proxy mode)
 		if (context.userSettings) {
 			logger.debug('Using provided user settings');
-			return context.userSettings;
+			return {
+				...context.userSettings,
+				builtInTools: this.filterSupportedConfigIds(normalizeBuiltInTools(context.userSettings.builtInTools)),
+			};
 		}
 
 		// Fetch from API client (skip in test environment)
@@ -319,19 +346,11 @@ export class ToolSelectionStrategy {
 		}
 
 		try {
-			const toolStates = await this.apiClient.getToolStates(context.hfToken);
-			if (toolStates) {
-				const builtInTools = Object.keys(toolStates).filter((id) => toolStates[id]);
-				// Note: spaceTools come from gradio endpoints in the API client
-				const spaceTools = this.apiClient.getGradioEndpoints().map((endpoint) => ({
-					name: endpoint.name,
-					subdomain: endpoint.subdomain,
-					_id: endpoint.id || endpoint.name,
-					emoji: endpoint.emoji || '🛠️',
-				}));
-
-				return { builtInTools, spaceTools };
-			}
+			const settings = await this.apiClient.getSettings(context.hfToken);
+			return {
+				...settings,
+				builtInTools: this.filterSupportedConfigIds(normalizeBuiltInTools(settings.builtInTools)),
+			};
 		} catch (error) {
 			logger.warn({ error }, 'Failed to fetch user settings from API client');
 		}

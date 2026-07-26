@@ -15,7 +15,6 @@ import {
 	Info,
 } from 'lucide-react';
 import { useState } from 'react';
-import { ToolPresetsCard } from './bouquets/ToolPresetsCard';
 
 interface ActionButton {
 	type: 'link' | 'download' | 'copy' | 'external';
@@ -1040,8 +1039,6 @@ export function SettingsCopyPage() {
 							</div>
 						</CardContent>
 					</Card>
-
-					<ToolPresetsCard />
 
 					{/* Client Configuration Section */}
 					<Card className="mt-8">

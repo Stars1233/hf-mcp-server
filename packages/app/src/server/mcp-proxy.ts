@@ -19,9 +19,9 @@ import { createRequire } from 'module';
 import { createGradioWidgetResourceConfig } from './resources/gradio-widget-resource.js';
 import { callStreamableHttpTool, readStreamableHttpResource } from './utils/streamable-http-tool-caller.js';
 import type { ProxyToolDefinition, ProxyToolInputSchema } from './utils/proxy-tools-config.js';
-import { cacheDiscoveredProxyAppTool, getProxyToolsConfig } from './utils/proxy-tools-config.js';
-import { discoverProxyAppToolCalls, rewriteProxyAppToolMeta } from './utils/proxy-apps.js';
-import { disableConfiguredTool } from './utils/disabled-tools.js';
+import { getProxyToolsConfig } from './utils/proxy-tools-config.js';
+import { rewriteProxyAppToolMeta } from './utils/proxy-apps.js';
+import { parseDisabledTools } from './utils/disabled-tools.js';
 
 const MCP_APP_RESOURCE_MIME_TYPE = 'text/html;profile=mcp-app';
 type ProxyToolHandlerExtra = RequestHandlerExtra<ServerRequest, ServerNotification>;
@@ -42,11 +42,12 @@ function registerProxyToolsFromConfig(
 	}
 
 	const enabledSet = enabledToolIds ? new Set(enabledToolIds) : null;
+	const disabledTools = parseDisabledTools();
 	const registered = new Set<string>();
 	const registeredResources = new Set<string>();
 
 	const registerProxyTool = (config: ProxyToolDefinition): void => {
-		if (!isProxyToolEnabled(config, enabledSet)) {
+		if (!isProxyToolEnabled(config, enabledSet) || disabledTools.has(config.toolName)) {
 			return;
 		}
 		if (registered.has(config.toolName)) {
@@ -74,14 +75,6 @@ function registerProxyToolsFromConfig(
 
 			try {
 				const result = await callStreamableHttpTool(config.url, config.upstreamToolName, params, hfToken, extra);
-				const appName =
-					typeof config.meta?.fastmcp === 'object' && config.meta.fastmcp !== null && 'app' in config.meta.fastmcp
-						? String((config.meta.fastmcp as Record<string, unknown>).app)
-						: undefined;
-				for (const appToolCall of discoverProxyAppToolCalls(result, appName)) {
-					const discoveredConfig = cacheDiscoveredProxyAppTool(config, appToolCall.toolName, appToolCall.argumentKeys);
-					registerProxyTool(discoveredConfig);
-				}
 
 				logToolQuery(config.toolName, config.upstreamToolName, params, {
 					...baseLoggingOptions,
@@ -103,7 +96,7 @@ function registerProxyToolsFromConfig(
 		};
 
 		try {
-			const registeredTool = server.registerTool(
+			server.registerTool(
 				config.toolName,
 				{
 					title,
@@ -117,7 +110,6 @@ function registerProxyToolsFromConfig(
 				},
 				handler
 			);
-			disableConfiguredTool(config.toolName, registeredTool);
 		} catch (error) {
 			if (isDuplicateRegistrationError(error)) {
 				logger.warn(

@@ -5,12 +5,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Server } from 'node:http';
 import type { TransportInfo } from '../shared/transport-info.js';
-import { settingsService, type SpaceTool } from '../shared/settings.js';
 import { logger } from './utils/logger.js';
 import type { BaseTransport } from './transport/base-transport.js';
-import type { McpApiClient } from './utils/mcp-api-client.js';
 import { formatMetricsForAPI } from '../shared/transport-metrics.js';
-import { ALL_BUILTIN_TOOL_IDS } from '@llmindset/hf-mcp';
 import { CORS_ALLOWED_ORIGINS, CORS_EXPOSED_HEADERS } from '../shared/constants.js';
 import { apiMetrics } from './utils/api-metrics.js';
 import { gradioMetrics } from './utils/gradio-metrics.js';
@@ -29,9 +26,7 @@ export class WebServer {
 		externalApiMode: false,
 		stdioClient: null,
 	};
-	private localSharedToolStates: Map<string, boolean> = new Map();
 	private transport?: BaseTransport;
-	private apiClient?: McpApiClient;
 
 	constructor() {
 		this.app = express() as Express;
@@ -109,21 +104,8 @@ export class WebServer {
 		this.transportInfo.stdioClient = clientInfo;
 	}
 
-	public initializeToolStates(): void {
-		// Initialize local shared tool states based on current settings to prevent initial event burst
-		const currentSettings = settingsService.getSettings();
-		for (const toolId of ALL_BUILTIN_TOOL_IDS) {
-			const isEnabled = currentSettings.builtInTools.includes(toolId);
-			this.localSharedToolStates.set(toolId, isEnabled);
-		}
-	}
-
 	public setTransport(transport: BaseTransport): void {
 		this.transport = transport;
-	}
-
-	public setApiClient(apiClient: McpApiClient): void {
-		this.apiClient = apiClient;
 	}
 
 	public getTransportInfo(): TransportInfo {
@@ -353,121 +335,6 @@ export class WebServer {
 				logger.error({ error }, 'Error retrieving transport metrics');
 				res.status(500).json({ error: 'Failed to retrieve transport metrics' });
 			}
-		});
-
-		// Settings endpoint
-		this.app.get('/api/settings', (_req, res) => {
-			res.json(settingsService.getSettings());
-		});
-
-		// Update tool settings endpoint
-		this.app.post('/api/settings', express.json(), (req, res) => {
-			const { builtInTools, spaceTools } = req.body as { builtInTools?: string[]; spaceTools?: SpaceTool[] };
-
-			let updatedSettings = settingsService.getSettings();
-
-			if (builtInTools !== undefined) {
-				updatedSettings = settingsService.updateBuiltInTools(builtInTools);
-			}
-
-			if (spaceTools !== undefined) {
-				updatedSettings = settingsService.updateSpaceTools(spaceTools);
-			}
-
-			// Enable or disable only the tools that actually changed state
-			if (builtInTools !== undefined) {
-				for (const toolId of ALL_BUILTIN_TOOL_IDS) {
-					const shouldBeEnabled = builtInTools.includes(toolId);
-					const currentlyEnabled = this.localSharedToolStates.get(toolId) ?? false;
-
-					// Only update state and emit events if state actually changed
-					if (currentlyEnabled !== shouldBeEnabled) {
-						this.localSharedToolStates.set(toolId, shouldBeEnabled);
-						// Emit event for MCP server instances
-						if (this.apiClient) {
-							this.apiClient.emit('toolStateChange', toolId, shouldBeEnabled);
-						}
-						logger.info(`Tool ${toolId} has been ${shouldBeEnabled ? 'enabled' : 'disabled'} via API`);
-					}
-				}
-			}
-
-			res.json(updatedSettings);
-		});
-
-		// Gradio endpoints endpoint
-		this.app.get('/api/gradio-endpoints', (_req, res) => {
-			if (!this.apiClient) {
-				res.json([]);
-				return;
-			}
-			res.json(this.apiClient.getGradioEndpoints());
-		});
-
-		// Update Gradio endpoint status
-		this.app.post('/api/gradio-endpoints/:index', express.json(), (req, res) => {
-			const index = parseInt(req.params.index);
-			const { enabled } = req.body as { enabled: boolean };
-
-			if (!this.apiClient) {
-				res.status(500).json({ error: 'API client not initialized' });
-				return;
-			}
-
-			const endpoints = this.apiClient.getGradioEndpoints();
-			if (index < 0 || index >= endpoints.length) {
-				res.status(404).json({ error: 'Endpoint not found' });
-				return;
-			}
-
-			// Update the state in the API client
-			this.apiClient.updateGradioEndpointState(index, enabled);
-
-			// Emit tool state change event for Gradio endpoint
-			const endpoint = endpoints[index];
-			if (endpoint) {
-				const toolId = `gradio_${endpoint.subdomain}`;
-				this.apiClient.emit('toolStateChange', toolId, enabled);
-			}
-
-			// Get the updated endpoint
-			const updatedEndpoint = endpoints[index];
-
-			res.json(updatedEndpoint);
-		});
-
-		// Update Gradio endpoint
-		this.app.put('/api/gradio-endpoints/:index', express.json(), (req, res) => {
-			const index = parseInt(req.params.index);
-			const { name, subdomain, id, emoji } = req.body as {
-				name: string;
-				subdomain: string;
-				id?: string;
-				emoji?: string;
-			};
-
-			if (!this.apiClient) {
-				res.status(500).json({ error: 'API client not initialized' });
-				return;
-			}
-
-			const endpoints = this.apiClient.getGradioEndpoints();
-			if (index < 0 || index >= endpoints.length) {
-				res.status(404).json({ error: 'Endpoint not found' });
-				return;
-			}
-
-			// Validate required fields
-			if (!name || !subdomain) {
-				res.status(400).json({ error: 'Name and subdomain are required' });
-				return;
-			}
-
-			// Update the endpoint in the API client
-			const updatedEndpoint = { name, subdomain, id, emoji };
-			this.apiClient.updateGradioEndpoint(index, updatedEndpoint);
-
-			res.json(updatedEndpoint);
 		});
 	}
 }

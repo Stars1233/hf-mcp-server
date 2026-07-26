@@ -1,9 +1,6 @@
 //import "./App.css";
 
-import { useState, useEffect } from 'react';
-import useSWR, { mutate } from 'swr';
-import { ToolsCard } from './components/ToolsCard';
-import { GradioEndpointsCard } from './components/GradioEndpointsCard';
+import useSWR from 'swr';
 import { TransportMetricsCard } from './components/TransportMetricsCard';
 import { McpMethodsCard } from './components/McpMethodsCard';
 import { ConnectionFooter } from './components/ConnectionFooter';
@@ -13,30 +10,6 @@ import { Button } from './components/ui/button';
 import { Separator } from './components/ui/separator';
 import { Copy, Settings } from 'lucide-react';
 import type { TransportInfo } from '../shared/transport-info.js';
-import { GRADIO_IMAGE_FILTER_FLAG, README_INCLUDE_FLAG } from '../shared/behavior-flags.js';
-import { normalizeBuiltInTools } from '../shared/tool-normalizer.js';
-import {
-	REPO_SEARCH_TOOL_ID,
-	CREATE_REPO_TOOL_ID,
-	HUB_REPO_DETAILS_TOOL_ID,
-	HF_FS_TOOL_ID,
-	REPO_SEARCH_TOOL_CONFIG,
-	CREATE_REPO_TOOL_CONFIG,
-	HUB_REPO_DETAILS_TOOL_CONFIG,
-	HF_FS_TOOL_CONFIG,
-} from '@llmindset/hf-mcp';
-
-type SpaceTool = {
-	_id: string;
-	name: string;
-	subdomain: string;
-	emoji: string;
-};
-
-type AppSettings = {
-	builtInTools: string[];
-	spaceTools: SpaceTool[];
-};
 
 // SWR fetcher function
 const fetcher = (url: string) =>
@@ -61,151 +34,8 @@ function App() {
 		revalidateOnFocus: true,
 	});
 
-	// Use SWR for settings
-	const { data: settings } = useSWR<AppSettings>('/api/settings', fetcher);
-	const readmeFlagEnabled = settings?.builtInTools?.includes(README_INCLUDE_FLAG) ?? false;
-	const gradioImageFilterEnabled = settings?.builtInTools?.includes(GRADIO_IMAGE_FILTER_FLAG) ?? false;
-
-	// Simple state: 3 text boxes, 3 checkboxes
-	const [spaceNames, setSpaceNames] = useState<string[]>(['', '', '']);
-	const [spaceSubdomains, setSpaceSubdomains] = useState<string[]>(['', '', '']);
-	const [enabledSpaces, setEnabledSpaces] = useState<boolean[]>([false, false, false]);
-
-	// Load space tools from API settings only on initial load
-	const [initialLoadDone, setInitialLoadDone] = useState(false);
-	useEffect(() => {
-		if (settings?.spaceTools && !initialLoadDone) {
-			const names = ['', '', ''];
-			const subdomains = ['', '', ''];
-			const enabled = [false, false, false];
-
-			settings.spaceTools.forEach((tool, index) => {
-				if (index < 3) {
-					names[index] = tool.name;
-					subdomains[index] = tool.subdomain;
-					enabled[index] = true;
-				}
-			});
-
-			setSpaceNames(names);
-			setSpaceSubdomains(subdomains);
-			setEnabledSpaces(enabled);
-			setInitialLoadDone(true);
-		}
-	}, [settings, initialLoadDone]);
-
 	const isLoading = !transportInfo && !transportError;
 	const error = transportError ? transportError.message : null;
-
-	// Handle checkbox changes
-	const handleToolToggle = async (toolId: string, checked: boolean) => {
-		try {
-			// Optimistic update - immediately update the UI
-			const currentSettings = settings || { builtInTools: [] };
-			const currentTools = normalizeBuiltInTools(currentSettings.builtInTools);
-			const updatedTools = checked
-				? [...currentTools.filter((id) => id !== toolId), toolId]
-				: currentTools.filter((id) => id !== toolId);
-			const newTools = normalizeBuiltInTools(updatedTools);
-
-			const optimisticSettings = {
-				...currentSettings,
-				builtInTools: newTools,
-			};
-
-			// Update the cache optimistically
-			mutate('/api/settings', optimisticSettings, false);
-
-			// Make the API call
-			const response = await fetch('/api/settings', {
-				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json',
-				},
-				body: JSON.stringify({ builtInTools: newTools }),
-			});
-
-			if (!response.ok) {
-				throw new Error(`Failed to update tool settings: ${response.status}`);
-			}
-
-			// Revalidate to get fresh data from server
-			mutate('/api/settings');
-
-			console.log(`${toolId} is now ${checked ? 'enabled' : 'disabled'}`);
-		} catch (err) {
-			console.error(`Error updating tool settings:`, err);
-			alert(`Error updating ${toolId}: ${err instanceof Error ? err.message : 'Unknown error'}`);
-
-			// Revert optimistic update on error
-			mutate('/api/settings');
-		}
-	};
-
-	// Handle space tool toggle - just update checkbox and send to API
-	const handleSpaceToolToggle = async (index: number, enabled: boolean) => {
-		const newEnabled = [...enabledSpaces];
-		newEnabled[index] = enabled;
-		setEnabledSpaces(newEnabled);
-
-		// Send only checked items to API
-		await updateSpaceToolsAPI(newEnabled);
-	};
-
-	// Handle space tool name change - just update the text box
-	const handleSpaceToolNameChange = async (index: number, name: string) => {
-		const newNames = [...spaceNames];
-		newNames[index] = name;
-		setSpaceNames(newNames);
-
-		// Send to API if this one is checked
-		if (enabledSpaces[index]) {
-			await updateSpaceToolsAPI(enabledSpaces);
-		}
-	};
-
-	// Handle space tool subdomain change - just update the text box
-	const handleSpaceToolSubdomainChange = async (index: number, subdomain: string) => {
-		const newSubdomains = [...spaceSubdomains];
-		newSubdomains[index] = subdomain;
-		setSpaceSubdomains(newSubdomains);
-
-		// Send to API if this one is checked
-		if (enabledSpaces[index]) {
-			await updateSpaceToolsAPI(enabledSpaces);
-		}
-	};
-
-	// Simple helper to send current state to API
-	const updateSpaceToolsAPI = async (enabledArray: boolean[]) => {
-		try {
-			const spaceTools: SpaceTool[] = [];
-
-			// Only include checked items
-			for (let i = 0; i < 3; i++) {
-				if (enabledArray[i] && spaceNames[i] && spaceSubdomains[i]) {
-					spaceTools.push({
-						_id: `space-${i}`,
-						name: spaceNames[i],
-						subdomain: spaceSubdomains[i],
-						emoji: '🔧',
-					});
-				}
-			}
-
-			const response = await fetch('/api/settings', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ spaceTools }),
-			});
-
-			if (!response.ok) {
-				throw new Error(`Failed to update space tools: ${response.status}`);
-			}
-		} catch (err) {
-			console.error('Error updating space tools:', err);
-		}
-	};
 
 	// Handler for copying MCP URL
 	const handleCopyMcpUrl = async () => {
@@ -223,53 +53,6 @@ function App() {
 		window.open('https://huggingface.co/settings/mcp', '_blank');
 	};
 
-	/** should we use annotations / Title here? */
-	const searchTools = {
-		hub_repo_search: {
-			id: REPO_SEARCH_TOOL_ID,
-			label: REPO_SEARCH_TOOL_CONFIG.annotations.title,
-			description: REPO_SEARCH_TOOL_CONFIG.description,
-			settings: { enabled: settings?.builtInTools?.includes(REPO_SEARCH_TOOL_ID) ?? true },
-		},
-
-		create_repo: {
-			id: CREATE_REPO_TOOL_ID,
-			label: CREATE_REPO_TOOL_CONFIG.annotations.title,
-			description: CREATE_REPO_TOOL_CONFIG.description,
-			settings: { enabled: settings?.builtInTools?.includes(CREATE_REPO_TOOL_ID) ?? true },
-		},
-
-		hub_repo_details: {
-			id: HUB_REPO_DETAILS_TOOL_ID,
-			label: HUB_REPO_DETAILS_TOOL_CONFIG.annotations.title,
-			description: HUB_REPO_DETAILS_TOOL_CONFIG.description,
-			settings: { enabled: settings?.builtInTools?.includes(HUB_REPO_DETAILS_TOOL_ID) ?? true },
-		},
-		hf_fs: {
-			id: HF_FS_TOOL_ID,
-			label: HF_FS_TOOL_CONFIG.annotations.title,
-			description: HF_FS_TOOL_CONFIG.description,
-			settings: { enabled: settings?.builtInTools?.includes(HF_FS_TOOL_ID) ?? true },
-		},
-		include_readme: {
-			id: README_INCLUDE_FLAG,
-			label: 'Allow README Include (flag)',
-			description:
-				'Allows hub_repo_details to attach README content when the tool request explicitly opts in. Requires reconnect to take effect.',
-			settings: { enabled: readmeFlagEnabled },
-		},
-	};
-
-	const spaceTools = {
-		no_gradio_images: {
-			id: GRADIO_IMAGE_FILTER_FLAG,
-			label: 'Disable Gradio Images (flag)',
-			description:
-				"Strips image responses from Gradio spaces. Mirrors the 'no_image_content' URL parameter and requires reconnect to take effect.",
-			settings: { enabled: gradioImageFilterEnabled },
-		},
-	};
-
 	return (
 		<>
 			<div className="min-h-screen p-4 sm:p-8 pb-20">
@@ -282,21 +65,6 @@ function App() {
 							<TabsTrigger value="mcp" className="whitespace-nowrap">
 								🔧 MCP
 							</TabsTrigger>
-							{!transportInfo?.externalApiMode && (
-								<TabsTrigger value="search" className="whitespace-nowrap">
-									🔍 Search
-								</TabsTrigger>
-							)}
-							{!transportInfo?.externalApiMode && (
-								<TabsTrigger value="spaces" className="whitespace-nowrap">
-									🚀 Spaces
-								</TabsTrigger>
-							)}
-							{!transportInfo?.externalApiMode && (
-								<TabsTrigger value="gradio" className="whitespace-nowrap">
-									🚀 Gradio
-								</TabsTrigger>
-							)}
 							<TabsTrigger value="home" className="whitespace-nowrap">
 								🏠 Home
 							</TabsTrigger>
@@ -307,38 +75,6 @@ function App() {
 						<TabsContent value="mcp" className="mt-0">
 							<McpMethodsCard />
 						</TabsContent>
-						{!transportInfo?.externalApiMode && (
-							<TabsContent value="search" className="mt-0">
-								<ToolsCard
-									title="🤗 Hugging Face Search Tools (MCP)"
-									description="Find and use Hugging Face and Community content."
-									tools={searchTools}
-									onToolToggle={handleToolToggle}
-								/>
-							</TabsContent>
-						)}
-						{!transportInfo?.externalApiMode && (
-							<TabsContent value="spaces" className="mt-0">
-								<ToolsCard
-									title="🤗 Hugging Face Space Tools (MCP)"
-									description="Manage and duplicate Hugging Face Spaces."
-									tools={spaceTools}
-									onToolToggle={handleToolToggle}
-								/>
-							</TabsContent>
-						)}
-						{!transportInfo?.externalApiMode && (
-							<TabsContent value="gradio" className="mt-0">
-								<GradioEndpointsCard
-									spaceNames={spaceNames}
-									spaceSubdomains={spaceSubdomains}
-									enabledSpaces={enabledSpaces}
-									onSpaceToolToggle={handleSpaceToolToggle}
-									onSpaceToolNameChange={handleSpaceToolNameChange}
-									onSpaceToolSubdomainChange={handleSpaceToolSubdomainChange}
-								/>
-							</TabsContent>
-						)}
 						<TabsContent value="home" className="mt-0">
 							{/* HF MCP Server Card */}
 							<Card>
@@ -356,49 +92,6 @@ function App() {
 											ecosystem of models, datasets, and Spaces, allowing AI assistants to search, analyze, and interact
 											with ML resources directly.
 										</p>
-									</div>
-
-									<Separator />
-
-									{/* Tool Management Scope Information */}
-									<div className="bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
-										<div className="flex items-start space-x-3">
-											<div className="flex-shrink-0 mt-0.5">
-												<svg
-													className="h-5 w-5 text-blue-600 dark:text-blue-400"
-													fill="currentColor"
-													viewBox="0 0 20 20"
-												>
-													<path
-														fillRule="evenodd"
-														d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z"
-														clipRule="evenodd"
-													/>
-												</svg>
-											</div>
-											<div>
-												<h3 className="text-sm font-semibold text-blue-900 dark:text-blue-100 mb-2">
-													Tool Management Scope
-												</h3>
-												{(transportInfo?.externalApiMode ||
-													(transportInfo?.transport !== 'stdio' && !transportInfo?.externalApiMode)) && (
-													<p className="text-sm text-blue-700 dark:text-blue-300 leading-relaxed">
-														{transportInfo?.externalApiMode ? (
-															<>
-																<strong>External API Mode:</strong> Tools are managed by an external API. Tool Selection
-																Tabs are not available.
-															</>
-														) : (
-															<>
-																<strong>Shared Mode:</strong> Tool toggles in this interface affect{' '}
-																<strong>all connected MCP server instances</strong> and control tool availability for
-																all connected Hosts.
-															</>
-														)}
-													</p>
-												)}
-											</div>
-										</div>
 									</div>
 
 									<Separator />

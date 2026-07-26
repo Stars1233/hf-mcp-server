@@ -30,11 +30,6 @@ describe('McpApiClient fallback settings', () => {
 		expect(settings.builtInTools).toEqual([...ANONYMOUS_BUILTIN_TOOL_IDS]);
 		expect(settings.builtInTools).toContain(HF_FS_TOOL_ID);
 		expect(settings.spaceTools).toEqual([]);
-		expect(client.getGradioEndpoints()).toEqual([]);
-
-		const states = await client.getToolStates();
-		expect(states?.[HF_FS_TOOL_ID]).toBe(true);
-		expect(client.getGradioEndpoints()).toEqual([]);
 	});
 
 	it('returns built-in tool settings from the settings API', async () => {

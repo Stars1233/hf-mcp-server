@@ -11,6 +11,7 @@ import type { TransportInfo } from '../../../src/shared/transport-info.js';
 import {
 	ALL_BUILTIN_TOOL_IDS,
 	CREATE_REPO_TOOL_ID,
+	DYNAMIC_SPACE_TOOL_ID,
 	HF_FILES_FLAG,
 	HF_FS_TOOL_ID,
 	HF_JOBS_TOOL_ID,
@@ -186,10 +187,7 @@ describe('ToolSelectionStrategy', () => {
 	// Create a real API client with minimal config for testing
 	beforeEach(() => {
 		const config: ApiClientConfig = {
-			type: 'polling',
-			baseUrl: 'http://localhost:3000',
-			pollInterval: 5000,
-			staticGradioEndpoints: [],
+			type: 'static',
 		};
 
 		const transportInfo: TransportInfo = {
@@ -353,7 +351,7 @@ describe('ToolSelectionStrategy', () => {
 	describe('Mix Mode (Second Precedence)', () => {
 		it('should mix hf_api tools with user settings', async () => {
 			const userSettings: AppSettings = {
-				builtInTools: ['custom_tool', 'another_custom_tool'],
+				builtInTools: [HF_JOBS_TOOL_ID, DYNAMIC_SPACE_TOOL_ID],
 				spaceTools: [],
 			};
 
@@ -403,7 +401,7 @@ describe('ToolSelectionStrategy', () => {
 
 		it('should mix search tools with user settings', async () => {
 			const userSettings: AppSettings = {
-				builtInTools: ['custom_tool', 'another_custom_tool'],
+				builtInTools: [HF_JOBS_TOOL_ID, DYNAMIC_SPACE_TOOL_ID],
 				spaceTools: [],
 			};
 
@@ -466,7 +464,7 @@ describe('ToolSelectionStrategy', () => {
 
 		it('should mix multiple bouquets when comma separated', async () => {
 			const userSettings: AppSettings = {
-				builtInTools: ['custom_tool'],
+				builtInTools: [HF_JOBS_TOOL_ID],
 				spaceTools: [],
 			};
 
@@ -503,7 +501,7 @@ describe('ToolSelectionStrategy', () => {
 
 		it('should ignore invalid mix bouquet names', async () => {
 			const userSettings: AppSettings = {
-				builtInTools: ['custom_tool'],
+				builtInTools: [HF_JOBS_TOOL_ID],
 				spaceTools: [],
 			};
 
@@ -522,6 +520,19 @@ describe('ToolSelectionStrategy', () => {
 	});
 
 	describe('User Settings Mode (Third Precedence)', () => {
+		it('ignores retired and unknown configuration IDs', async () => {
+			const result = await strategy.selectTools({
+				headers: {},
+				userSettings: {
+					builtInTools: ['model_search', 'unknown_tool', REPO_SEARCH_TOOL_ID],
+					spaceTools: [],
+				},
+				hfToken: 'test-token',
+			});
+
+			expect(result.enabledToolIds).toEqual([REPO_SEARCH_TOOL_ID, HF_FS_TOOL_ID]);
+		});
+
 		it('should restrict anonymous user settings to the anonymous allowlist', async () => {
 			const userSettings: AppSettings = {
 				builtInTools: [CREATE_REPO_TOOL_ID, REPO_SEARCH_TOOL_ID, HF_SANDBOX_TOOL_ID],
@@ -797,7 +808,7 @@ describe('ToolSelectionStrategy', () => {
 
 		it('should handle all possible tool types in mix', async () => {
 			const userSettings: AppSettings = {
-				builtInTools: ['custom_tool'], // Start with one tool
+				builtInTools: [HF_JOBS_TOOL_ID], // Start with one tool
 				spaceTools: [],
 			};
 
@@ -825,7 +836,7 @@ describe('ToolSelectionStrategy', () => {
 
 		it('should preserve gradio endpoints when mixing with all bouquet in internal API mode', async () => {
 			const userSettings: AppSettings = {
-				builtInTools: ['custom_tool'], // Most tools disabled via frontend
+				builtInTools: [HF_JOBS_TOOL_ID], // Start from a minimal per-user configuration
 				spaceTools: [
 					{
 						name: 'My Custom GPT',
@@ -901,7 +912,7 @@ describe('ToolSelectionStrategy', () => {
 
 		it('should include gradio endpoints in mix mode', async () => {
 			const userSettings: AppSettings = {
-				builtInTools: ['custom_tool'],
+				builtInTools: [HF_JOBS_TOOL_ID],
 				spaceTools: [],
 			};
 

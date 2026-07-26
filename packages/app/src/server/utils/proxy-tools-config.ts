@@ -58,47 +58,6 @@ export function getProxyToolDefinition(toolName: string): ProxyToolDefinition | 
 	return cachedToolsByName.get(toolName);
 }
 
-export function cacheDiscoveredProxyAppTool(
-	parentConfig: ProxyToolDefinition,
-	toolName: string,
-	argumentKeys: string[]
-): ProxyToolDefinition {
-	const existing = cachedToolsByName.get(toolName);
-	const existingProperties = existing?.inputSchema?.properties ?? {};
-	const discoveredProperties = Object.fromEntries(argumentKeys.map((key) => [key, {}]));
-	const inputSchema: ProxyToolInputSchema = {
-		type: 'object',
-		properties: {
-			...existingProperties,
-			...discoveredProperties,
-		},
-	};
-	const definition: ProxyToolDefinition = {
-		...parentConfig,
-		toolName,
-		upstreamToolName: toolName,
-		description: `FastMCP app backend action discovered from ${parentConfig.toolName}.`,
-		inputSchema,
-		meta: {
-			visibility: ['app'],
-			hfProxy: {
-				discoveredFrom: parentConfig.toolName,
-				upstreamToolName: toolName,
-			},
-		},
-	};
-
-	cachedTools = cachedTools ?? [];
-	const index = cachedTools.findIndex((tool) => tool.toolName === toolName);
-	if (index === -1) {
-		cachedTools.push(definition);
-	} else {
-		cachedTools[index] = definition;
-	}
-	cachedToolsByName.set(toolName, definition);
-	return definition;
-}
-
 export async function loadProxyToolsConfig(): Promise<ProxyToolDefinition[]> {
 	if (cachedTools) {
 		return cachedTools;
@@ -213,13 +172,7 @@ async function fetchProxyToolSchemas(
 		}
 
 		return tools
-			.map((tool) =>
-				buildProxyToolDefinition(
-					source,
-					tool,
-					tools.length === 1 ? source.proxyId : tool.name
-				)
-			)
+			.map((tool) => buildProxyToolDefinition(source, tool, tools.length === 1 ? source.proxyId : tool.name))
 			.filter((tool): tool is ProxyToolDefinition => Boolean(tool));
 	} catch (error) {
 		logger.error({ error, proxyId: source.proxyId, url: source.url }, 'Proxy tool schema fetch failed');
@@ -233,11 +186,7 @@ async function fetchProxyToolSchemas(
 	}
 }
 
-function buildProxyToolDefinition(
-	source: ProxyToolSource,
-	tool: Tool,
-	toolName: string
-): ProxyToolDefinition | null {
+function buildProxyToolDefinition(source: ProxyToolSource, tool: Tool, toolName: string): ProxyToolDefinition | null {
 	const inputSchema = tool.inputSchema as ProxyToolInputSchema | undefined;
 	if (!inputSchema || inputSchema.type !== 'object') {
 		logger.error({ proxyId: source.proxyId, toolName: tool.name }, 'Proxy tool schema missing or invalid');

@@ -13,7 +13,7 @@ import { createGradioToolName } from './utils/gradio-utils.js';
 import { createAudioPlayerUIResource } from './utils/ui/audio-player.js';
 import { spaceMetadataCache, CACHE_CONFIG } from './utils/gradio-cache.js';
 import { callGradioTool, applyResultPostProcessing, type GradioToolCallOptions } from './utils/gradio-tool-caller.js';
-import { disableConfiguredTool } from './utils/disabled-tools.js';
+import { parseDisabledTools } from './utils/disabled-tools.js';
 import * as hfMcp from '@llmindset/hf-mcp';
 import { fetchWithProfile, NETWORK_FETCH_PROFILES } from '@llmindset/hf-mcp/network';
 
@@ -535,6 +535,7 @@ export function registerRemoteTools(
 	},
 	options: RegisterRemoteToolsOptions = {}
 ): void {
+	const disabledTools = parseDisabledTools();
 	connection.tools.forEach((tool, toolIndex) => {
 		// Generate tool name
 		const outwardFacingName = createGradioToolName(
@@ -543,6 +544,10 @@ export function registerRemoteTools(
 			connection.isPrivate,
 			toolIndex
 		);
+		if (disabledTools.has(outwardFacingName)) {
+			logger.info({ toolName: outwardFacingName }, 'Skipping disabled remote tool');
+			return;
+		}
 
 		// Create display info
 		const { title, description } = createToolDisplayInfo(connection, tool);
@@ -574,7 +579,7 @@ export function registerRemoteTools(
 		);
 
 		// Register the tool
-		const theTool = server.registerTool(
+		server.registerTool(
 			outwardFacingName,
 			{
 				title: title,
@@ -584,18 +589,18 @@ export function registerRemoteTools(
 					openWorldHint: true,
 					title: title,
 				},
+				...(sessionInfo?.clientInfo?.name === 'openai-mcp'
+					? {
+							_meta: {
+								'openai/outputTemplate': options.gradioWidgetUri || '',
+								'openai/toolInvocation/invoking': `Calling the Hugging Face Space ${connection.name || connection.endpointId}`,
+								'openai/toolInvocation/invoked': 'Your content is being generated',
+							},
+						}
+					: {}),
 			},
 			handler
 		);
-		disableConfiguredTool(outwardFacingName, theTool);
-
-		if (sessionInfo?.clientInfo?.name == 'openai-mcp') {
-			theTool._meta = {
-				'openai/outputTemplate': options.gradioWidgetUri || '',
-				'openai/toolInvocation/invoking': `Calling the Hugging Face Space ${connection.name || connection.endpointId}`,
-				'openai/toolInvocation/invoked': `Your content is being generated`,
-			};
-		}
 	});
 }
 
@@ -654,7 +659,7 @@ export function convertJsonSchemaToZod(jsonSchemaProperty: JsonSchemaProperty, s
 				.object({
 					_type: z.string().optional(),
 				})
-			.optional(),
+				.optional(),
 		});
 	} else if (nullableUnionSchema) {
 		zodSchema = convertJsonSchemaToZod(nullableUnionSchema, true).nullable();
@@ -730,7 +735,12 @@ export function convertJsonSchemaToZod(jsonSchemaProperty: JsonSchemaProperty, s
 	}
 
 	// Apply default value from the Schema
-	if (!skipDefault && 'default' in jsonSchemaProperty && jsonSchemaProperty.default !== undefined && jsonSchemaProperty.default !== null) {
+	if (
+		!skipDefault &&
+		'default' in jsonSchemaProperty &&
+		jsonSchemaProperty.default !== undefined &&
+		jsonSchemaProperty.default !== null
+	) {
 		let defaultValue = jsonSchemaProperty.default;
 
 		// For FileData types, keep the full object as default

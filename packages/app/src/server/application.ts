@@ -7,15 +7,14 @@ import type { WebServer } from './web-server.js';
 import { logger } from './utils/logger.js';
 import { createServerFactory } from './mcp-server.js';
 import { createProxyServerFactory } from './mcp-proxy.js';
-import { McpApiClient, type ApiClientConfig, type GradioEndpoint } from './utils/mcp-api-client.js';
-import { DEFAULT_SPACE_TOOLS, type SpaceTool } from '../shared/settings.js';
+import { McpApiClient, type ApiClientConfig } from './utils/mcp-api-client.js';
 import { loadProxyToolsConfig } from './utils/proxy-tools-config.js';
 
 interface ApplicationOptions {
 	transportType: TransportType;
 	webAppPort: number;
 	webServerInstance: WebServer;
-	apiClientConfig?: ApiClientConfig; // Optional - defaults to polling mode
+	apiClientConfig?: ApiClientConfig;
 }
 
 /**
@@ -49,20 +48,6 @@ export class Application {
 			stdioClient: this.transportType === 'stdio' ? null : undefined,
 		};
 
-		// Configure API client with transport info
-		// Convert spaceTools to GradioEndpoints format for backward compatibility
-		const convertSpaceToolsToGradioEndpoints = (spaceTools: SpaceTool[]): GradioEndpoint[] => {
-			return spaceTools.map((spaceTool) => ({
-				name: spaceTool.name,
-				subdomain: spaceTool.subdomain,
-				id: spaceTool._id,
-				emoji: spaceTool.emoji,
-			}));
-		};
-
-		// Use shared default space tools
-		const defaultGradioEndpoints = convertSpaceToolsToGradioEndpoints(DEFAULT_SPACE_TOOLS);
-
 		let apiClientConfig: ApiClientConfig;
 
 		// Check for USER_CONFIG_API environment variable
@@ -76,14 +61,11 @@ export class Application {
 			};
 			logger.info(`Using external API client with user config API: ${userConfigApi}`);
 		} else {
-			// Default to polling mode
+			// Use immutable built-in settings when no per-user API is configured.
 			apiClientConfig = options.apiClientConfig || {
-				type: 'polling',
-				baseUrl: `http://localhost:${String(this.webAppPort)}`,
-				pollInterval: 5000,
-				staticGradioEndpoints: defaultGradioEndpoints,
+				type: 'static',
 			};
-			logger.info(`Using internal API client with user config API: ${apiClientConfig.baseUrl}}`);
+			logger.info('Using immutable built-in tool settings');
 		}
 		this.apiClient = new McpApiClient(apiClientConfig, transportInfo);
 
@@ -106,9 +88,6 @@ export class Application {
 			this.webServerInstance.setTransportInfo(transportInfo);
 		}
 
-		// Setup tool management for web server
-		this.setupToolManagement();
-
 		// Configure API endpoints
 		this.webServerInstance.setupApiRoutes();
 
@@ -120,17 +99,6 @@ export class Application {
 
 		// Setup static files (must be AFTER transport routes to avoid catch-all conflicts)
 		await this.webServerInstance.setupStaticFiles(this.isDev);
-
-		// Start API client (global tool management)
-		await this.startToolManagement();
-	}
-
-	private setupToolManagement(): void {
-		// Web server manages tool state directly - no registered tools needed
-
-		// Initialize tool states and pass API client to WebServer
-		this.webServerInstance.initializeToolStates();
-		this.webServerInstance.setApiClient(this.apiClient);
 	}
 
 	private async initializeTransport(): Promise<void> {
@@ -165,16 +133,7 @@ export class Application {
 		}
 	}
 
-	private async startToolManagement(): Promise<void> {
-		// Start API client for global tool state management
-		await this.apiClient.startPolling((toolId, enabled) => {
-			logger.debug(`Global tool ${toolId} ${enabled ? 'enabled' : 'disabled'}`);
-		});
-	}
-
 	async stop(): Promise<void> {
-		// Stop global API client
-		this.apiClient.stopPolling();
 		// Signal transport to stop accepting new connections
 		if (this.transport?.shutdown) {
 			this.transport.shutdown();
