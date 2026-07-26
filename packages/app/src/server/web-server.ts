@@ -262,6 +262,8 @@ export class WebServer {
 						isConnected: hasRecentActivity,
 						connectionStatus: hasRecentActivity ? ('Connected' as const) : ('Disconnected' as const),
 						ipAddress: session.ipAddress,
+						protocolEra: session.protocolEra,
+						protocolVersion: session.protocolVersion,
 					};
 				});
 

@@ -11,6 +11,8 @@ type SessionData = {
 	};
 	isConnected: boolean;
 	connectionStatus?: 'Connected' | 'Disconnected';
+	protocolEra?: 'legacy' | 'modern';
+	protocolVersion?: string;
 };
 
 type CachedSession = SessionData & {

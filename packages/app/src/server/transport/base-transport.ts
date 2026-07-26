@@ -5,6 +5,7 @@ import type { TransportMetrics } from '../../shared/transport-metrics.js';
 import { MetricsCounter } from '../../shared/transport-metrics.js';
 import type { AppSettings } from '../../shared/settings.js';
 import type { ToolBehaviorFlags } from '../../shared/behavior-flags.js';
+import type { ProtocolEra } from '../../shared/transport-metrics.js';
 import { whoAmI, HubApiError, type WhoAmI } from '@huggingface/hub';
 import { extractAuthBouquetAndMix } from '../utils/auth-utils.js';
 import { getMetricsSafeName } from '../utils/gradio-metrics.js';
@@ -22,7 +23,10 @@ export interface ServerFactoryResult {
 export interface ServerRequestContext {
 	clientSessionId?: string;
 	requestId?: string;
-	protocolEra?: 'legacy' | 'modern';
+	protocolEra?: ProtocolEra;
+	protocolVersion?: string;
+	userHash?: string;
+	clientCapabilities?: Record<string, unknown>;
 	isAuthenticated?: boolean;
 	clientInfo?: { name: string; version: string };
 	authenticatedUser?: WhoAmI;
@@ -57,6 +61,10 @@ export interface SessionMetadata {
 		sampling?: boolean;
 		roots?: boolean;
 	};
+	clientCapabilities?: Record<string, unknown>;
+	protocolEra?: ProtocolEra;
+	protocolVersion?: string;
+	userHash?: string;
 	ipAddress?: string;
 	authToken?: string;
 }
@@ -105,6 +113,27 @@ export abstract class BaseTransport {
 	 */
 	protected trackRequest(): void {
 		this.metrics.trackRequest();
+	}
+
+	protected trackProtocolRequest(era: ProtocolEra, version: string): void {
+		this.metrics.trackProtocolRequest(era, version);
+	}
+
+	protected trackClientProtocol(
+		clientInfo: { name: string; version: string },
+		era: ProtocolEra,
+		version: string
+	): void {
+		this.metrics.trackClientProtocol(clientInfo, era, version);
+	}
+
+	protected trackAuthenticatedUser(
+		username: string | undefined,
+		era: ProtocolEra,
+		version: string,
+		clientInfo?: { name: string; version: string }
+	): string | undefined {
+		return username ? this.metrics.trackAuthenticatedUser(username, era, version, clientInfo) : undefined;
 	}
 
 	/**

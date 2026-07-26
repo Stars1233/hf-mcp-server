@@ -2,6 +2,7 @@
 
 import useSWR from 'swr';
 import { TransportMetricsCard } from './components/TransportMetricsCard';
+import { ProtocolMetricsCard } from './components/ProtocolMetricsCard';
 import { McpMethodsCard } from './components/McpMethodsCard';
 import { ConnectionFooter } from './components/ConnectionFooter';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from './components/ui/tabs';
@@ -65,6 +66,9 @@ function App() {
 							<TabsTrigger value="mcp" className="whitespace-nowrap">
 								🔧 MCP
 							</TabsTrigger>
+							<TabsTrigger value="protocols" className="whitespace-nowrap">
+								🔀 Protocols
+							</TabsTrigger>
 							<TabsTrigger value="home" className="whitespace-nowrap">
 								🏠 Home
 							</TabsTrigger>
@@ -74,6 +78,9 @@ function App() {
 						</TabsContent>
 						<TabsContent value="mcp" className="mt-0">
 							<McpMethodsCard />
+						</TabsContent>
+						<TabsContent value="protocols" className="mt-0">
+							<ProtocolMetricsCard />
 						</TabsContent>
 						<TabsContent value="home" className="mt-0">
 							{/* HF MCP Server Card */}

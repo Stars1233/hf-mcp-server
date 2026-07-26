@@ -56,6 +56,7 @@ interface JsonRpcRequestBody {
 		cursor?: unknown;
 		clientInfo?: unknown;
 		capabilities?: unknown;
+		protocolVersion?: unknown;
 		name?: string;
 		_meta?: Record<string, unknown>;
 	};
@@ -70,6 +71,9 @@ interface ModernRequestData {
 	useFullServer: boolean;
 	skipGradio: boolean;
 	discoveryOnly: boolean;
+	protocolVersion: string;
+	clientCapabilities: Record<string, unknown>;
+	userHash?: string;
 }
 
 function isErrorResponseBody(body: string): boolean {
@@ -302,6 +306,18 @@ export class StatelessHttpTransport extends BaseTransport {
 		return typeof name === 'string' && typeof version === 'string' ? { name, version } : undefined;
 	}
 
+	private extractModernProtocolVersion(requestBody: JsonRpcRequestBody | undefined): string {
+		const version = requestBody?.params?._meta?.['io.modelcontextprotocol/protocolVersion'];
+		return typeof version === 'string' ? version : 'unknown';
+	}
+
+	private extractModernClientCapabilities(requestBody: JsonRpcRequestBody | undefined): Record<string, unknown> {
+		const capabilities = requestBody?.params?._meta?.['io.modelcontextprotocol/clientCapabilities'];
+		return typeof capabilities === 'object' && capabilities !== null && !Array.isArray(capabilities)
+			? (capabilities as Record<string, unknown>)
+			: {};
+	}
+
 	private toWebRequest(req: Request): globalThis.Request {
 		const headers = new Headers();
 		for (const [name, value] of Object.entries(req.headers)) {
@@ -342,6 +358,9 @@ export class StatelessHttpTransport extends BaseTransport {
 						clientInfo: requestData.clientInfo,
 						authenticatedUser: requestData.authenticatedUser,
 						protocolEra: 'modern',
+						protocolVersion: requestData.protocolVersion,
+						clientCapabilities: requestData.clientCapabilities,
+						userHash: requestData.userHash,
 					}
 				);
 				result.server.server.onerror = (error) => {
@@ -367,7 +386,6 @@ export class StatelessHttpTransport extends BaseTransport {
 		this.app.post('/mcp', async (req: Request, res: Response) => {
 			this.trackRequest();
 			const legacy = await isLegacyRequest(this.toWebRequest(req));
-			this.metrics.trackProtocolEra(legacy ? 'legacy' : 'modern');
 			if (legacy) {
 				await this.handleJsonRpcRequest(req, res);
 			} else {
@@ -426,9 +444,12 @@ export class StatelessHttpTransport extends BaseTransport {
 		const requestBody = req.body as JsonRpcRequestBody | undefined;
 		const trackingName = this.extractMethodForTracking(requestBody);
 		const clientInfo = this.extractModernClientInfo(requestBody);
+		const protocolVersion = this.extractModernProtocolVersion(requestBody);
+		const clientCapabilities = this.extractModernClientCapabilities(requestBody);
 		const ipAddress = this.extractIpAddress(req.headers, req.ip);
 
 		this.trackIpAddress(ipAddress);
+		this.trackProtocolRequest('modern', protocolVersion);
 
 		const authResult = await this.validateAuthAndTrackMetrics(headers);
 		if (!authResult.shouldContinue) {
@@ -436,7 +457,6 @@ export class StatelessHttpTransport extends BaseTransport {
 			res.status(authResult.statusCode || 401).send('Unauthorized');
 			return;
 		}
-
 		this.trackNewConnection();
 		if (clientInfo) {
 			// Modern HTTP is request-scoped. Mark the identity connected only
@@ -445,17 +465,26 @@ export class StatelessHttpTransport extends BaseTransport {
 			this.updateClientActivity(clientInfo);
 			this.trackClientIpAddress(ipAddress, clientInfo);
 			this.trackClientAuth(headers['authorization']?.replace(/^Bearer\s+/i, ''), clientInfo);
+			this.trackClientProtocol(clientInfo, 'modern', protocolVersion);
 		}
+		const userHash = this.trackAuthenticatedUser(
+			authResult.authenticatedUser?.name,
+			'modern',
+			protocolVersion,
+			clientInfo
+		);
 
 		if (requestBody?.method === 'server/discover') {
 			logSystemEvent('server_discover', requestId, {
 				requestId,
 				protocolEra: 'modern',
+				protocolVersion,
+				userHash,
 				isAuthenticated: authResult.userIdentified,
 				clientName: clientInfo?.name,
 				clientVersion: clientInfo?.version,
 				requestJson: requestBody.params || {},
-				capabilities: requestBody.params?._meta?.['io.modelcontextprotocol/clientCapabilities'],
+				capabilities: clientCapabilities,
 				ipAddress,
 			});
 		}
@@ -473,6 +502,9 @@ export class StatelessHttpTransport extends BaseTransport {
 			useFullServer,
 			skipGradio,
 			discoveryOnly: requestBody?.method === 'server/discover',
+			protocolVersion,
+			clientCapabilities,
+			userHash,
 		};
 
 		const responseCapture = new MetricsResponseCapture();
@@ -542,10 +574,24 @@ export class StatelessHttpTransport extends BaseTransport {
 		this.trackIpAddress(ipAddress);
 
 		// Extract method name for tracking using shared utility
-		const requestBody = req.body as
-			{ method?: string; params?: { clientInfo?: unknown; capabilities?: unknown; name?: string } } | undefined;
+		const requestBody = req.body as JsonRpcRequestBody | undefined;
 
 		const trackingName = this.extractMethodForTracking(requestBody);
+		const requestSessionId = headers['mcp-session-id'];
+		const existingSession =
+			typeof requestSessionId === 'string' ? this.analyticsSessions.get(requestSessionId) : undefined;
+		const requestedProtocolVersion = requestBody?.params?.protocolVersion;
+		const protocolVersion =
+			(typeof requestedProtocolVersion === 'string' ? requestedProtocolVersion : undefined) ??
+			headers['mcp-protocol-version'] ??
+			existingSession?.protocolVersion ??
+			'unknown';
+		const sentCapabilities = requestBody?.params?.capabilities;
+		const clientCapabilities =
+			typeof sentCapabilities === 'object' && sentCapabilities !== null && !Array.isArray(sentCapabilities)
+				? (sentCapabilities as Record<string, unknown>)
+				: (existingSession?.clientCapabilities ?? {});
+		this.trackProtocolRequest('legacy', protocolVersion);
 
 		// Resource subscriptions are never supported (skills are static). Reject these
 		// cheaply before building any server — cursor-vscode floods `resources/subscribe`.
@@ -566,6 +612,17 @@ export class StatelessHttpTransport extends BaseTransport {
 			res.set('WWW-Authenticate', buildOAuthResourceHeader(req));
 			res.status(authResult.statusCode || 401).send('Unauthorized');
 			return;
+		}
+		const protocolClientInfo = this.extractClientInfoFromRequest(requestBody) ?? existingSession?.clientInfo;
+		const userHash = this.trackAuthenticatedUser(
+			authResult.authenticatedUser?.name,
+			'legacy',
+			protocolVersion,
+			protocolClientInfo
+		);
+		if (requestBody?.method !== 'initialize' && protocolClientInfo) {
+			this.updateClientActivity(protocolClientInfo);
+			this.trackClientProtocol(protocolClientInfo, 'legacy', protocolVersion);
 		}
 
 		if (rpcMethod && UNSUPPORTED_PROMPT_METHODS.has(rpcMethod)) {
@@ -596,7 +653,14 @@ export class StatelessHttpTransport extends BaseTransport {
 			if (requestBody?.method === 'initialize') {
 				// Create new session
 				sessionId = randomUUID();
-				this.createAnalyticsSession(sessionId, authResult.userIdentified, ipAddress);
+				this.createAnalyticsSession(
+					sessionId,
+					authResult.userIdentified,
+					ipAddress,
+					protocolVersion,
+					clientCapabilities,
+					userHash
+				);
 
 				// Add session ID to response headers
 				res.setHeader('Mcp-Session-Id', sessionId);
@@ -605,6 +669,9 @@ export class StatelessHttpTransport extends BaseTransport {
 				const initClientInfo = this.extractClientInfoFromRequest(requestBody);
 				logSystemEvent('initialize', sessionId, {
 					clientSessionId: sessionId,
+					protocolEra: 'legacy',
+					protocolVersion,
+					userHash,
 					isAuthenticated: authResult.userIdentified,
 					clientName: initClientInfo?.name,
 					clientVersion: initClientInfo?.version,
@@ -722,6 +789,10 @@ export class StatelessHttpTransport extends BaseTransport {
 			if (extractedClientInfo) {
 				clientInfo = extractedClientInfo;
 			}
+			if (requestBody?.method === 'initialize' && clientInfo) {
+				this.trackClientProtocol(clientInfo, 'legacy', protocolVersion);
+				this.trackAuthenticatedUser(authResult.authenticatedUser?.name, 'legacy', protocolVersion, clientInfo);
+			}
 
 			if (await this.tryHandleStaticResourceRequest(req, res, requestBody, clientInfo, startTime)) {
 				return;
@@ -738,6 +809,9 @@ export class StatelessHttpTransport extends BaseTransport {
 				const sessionInfoForLogging = {
 					clientSessionId: sessionId,
 					protocolEra: 'legacy' as const,
+					protocolVersion,
+					clientCapabilities,
+					userHash,
 					isAuthenticated: analyticsSession?.isAuthenticated ?? isAuthenticated,
 					clientInfo,
 					authenticatedUser: authResult.authenticatedUser,
@@ -890,6 +964,9 @@ export class StatelessHttpTransport extends BaseTransport {
 			// Log session delete event
 			logSystemEvent('session_delete', sessionId, {
 				clientSessionId: sessionId,
+				protocolEra: analyticsSession?.protocolEra,
+				protocolVersion: analyticsSession?.protocolVersion,
+				userHash: analyticsSession?.userHash,
 				isAuthenticated: analyticsSession?.isAuthenticated,
 				clientName: analyticsSession?.clientInfo?.name,
 				clientVersion: analyticsSession?.clientInfo?.version,
@@ -928,7 +1005,14 @@ export class StatelessHttpTransport extends BaseTransport {
 	}
 
 	// Analytics mode methods
-	private createAnalyticsSession(sessionId: string, isAuthenticated: boolean, ipAddress?: string): void {
+	private createAnalyticsSession(
+		sessionId: string,
+		isAuthenticated: boolean,
+		ipAddress?: string,
+		protocolVersion?: string,
+		clientCapabilities?: Record<string, unknown>,
+		userHash?: string
+	): void {
 		const session: SessionMetadata = {
 			id: sessionId,
 			connectedAt: new Date(),
@@ -937,6 +1021,10 @@ export class StatelessHttpTransport extends BaseTransport {
 			isAuthenticated,
 			capabilities: {},
 			ipAddress,
+			protocolEra: 'legacy',
+			protocolVersion,
+			clientCapabilities,
+			userHash,
 		};
 
 		this.analyticsSessions.set(sessionId, session);

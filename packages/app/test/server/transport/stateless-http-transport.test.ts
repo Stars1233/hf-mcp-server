@@ -333,6 +333,8 @@ describe('StatelessHttpTransport', () => {
 				});
 				expect(factoryCalls.at(-1)?.sessionInfo).toMatchObject({
 					protocolEra: 'modern',
+					protocolVersion: '2026-07-28',
+					clientCapabilities: expect.any(Object),
 					isAuthenticated: false,
 					clientInfo: { name: 'modern-contract-test', version: '1.0.0' },
 					requestId: expect.any(String),
@@ -341,6 +343,12 @@ describe('StatelessHttpTransport', () => {
 				const metrics = transport.getMetrics();
 				expect(metrics.protocolEras.modern).toBeGreaterThanOrEqual(2);
 				expect(metrics.protocolEras.legacy).toBe(0);
+				expect(metrics.protocolVersions.get('modern:2026-07-28')).toMatchObject({
+					era: 'modern',
+					version: '2026-07-28',
+					uniqueClients: 1,
+					unattributedRequests: 0,
+				});
 				expect(metrics.methods.get('server/discover')).toMatchObject({ count: 1, errors: 0 });
 				expect(metrics.methods.get('tools/call:progress_test')).toMatchObject({ count: 1, errors: 0 });
 				expect(Array.from(metrics.clients.values())).toContainEqual(
@@ -349,8 +357,15 @@ describe('StatelessHttpTransport', () => {
 						version: '1.0.0',
 						isConnected: false,
 						activeConnections: 0,
+						protocols: expect.any(Map),
 					})
 				);
+				const modernClient = Array.from(metrics.clients.values()).find(
+					(clientMetrics) => clientMetrics.name === 'modern-contract-test'
+				);
+				expect(modernClient?.protocols.get('modern:2026-07-28')).toMatchObject({
+					requestCount: expect.any(Number),
+				});
 				expect(transport.getSessions()).toEqual([]);
 			} finally {
 				httpServer.close();
@@ -421,6 +436,11 @@ describe('StatelessHttpTransport', () => {
 
 				const metrics = transport.getMetrics();
 				expect(metrics.protocolEras).toEqual({ legacy: 1, modern: 0 });
+				expect(metrics.protocolVersions.get('legacy:2025-03-26')).toMatchObject({
+					requestCount: 1,
+					uniqueClients: 1,
+					unattributedRequests: 0,
+				});
 				expect(metrics.methods.get('initialize')).toMatchObject({ count: 1, errors: 0 });
 				expect(metrics.sessions.created).toBe(1);
 				expect(metrics.connections.active).toBe(1);

@@ -101,11 +101,12 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 		const clientCorrelationId = sessionInfo?.clientSessionId ?? sessionInfo?.requestId;
 		const getLoggingOptions = () => {
 			const options = {
-				// Query log storage predates request-scoped modern HTTP. Keep the
-				// existing correlation column populated until its schema is versioned.
-				clientSessionId: clientCorrelationId,
+				clientSessionId: sessionInfo?.clientSessionId,
 				requestId: sessionInfo?.requestId,
 				protocolEra: sessionInfo?.protocolEra,
+				protocolVersion: sessionInfo?.protocolVersion,
+				clientCapabilities: sessionInfo?.clientCapabilities,
+				userHash: sessionInfo?.userHash,
 				isAuthenticated: sessionInfo?.isAuthenticated ?? !!hfToken,
 				clientName: sessionInfo?.clientInfo?.name,
 				clientVersion: sessionInfo?.clientInfo?.version,
@@ -697,11 +698,18 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 
 					if (params.operation === 'invoke') {
 						const startTime = Date.now();
+						let notificationCount = 0;
 
 						try {
 							const spaceTool = new SpaceTool(hfToken);
+							const progressRelay = createProgressRelay(ctx);
 							const result = await spaceTool.execute(params, {
-								onProgress: createProgressRelay(ctx),
+								onProgress: progressRelay
+									? async (progress) => {
+											notificationCount++;
+											await progressRelay(progress);
+										}
+									: undefined,
 							});
 
 							if ('result' in result && result.result) {
@@ -746,6 +754,13 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 									error: invokeResult.isError ? JSON.stringify(responseContent) : undefined,
 									responseSizeBytes: JSON.stringify(responseContent).length,
 									isDynamic: true,
+									notificationCount,
+									clientSessionId: sessionInfo?.clientSessionId,
+									requestId: sessionInfo?.requestId,
+									protocolEra: sessionInfo?.protocolEra,
+									protocolVersion: sessionInfo?.protocolVersion,
+									clientCapabilities: sessionInfo?.clientCapabilities,
+									userHash: sessionInfo?.userHash,
 								});
 
 								return {
@@ -781,6 +796,13 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 								success: false,
 								error: err,
 								isDynamic: true,
+								notificationCount,
+								clientSessionId: sessionInfo?.clientSessionId,
+								requestId: sessionInfo?.requestId,
+								protocolEra: sessionInfo?.protocolEra,
+								protocolVersion: sessionInfo?.protocolVersion,
+								clientCapabilities: sessionInfo?.clientCapabilities,
+								userHash: sessionInfo?.userHash,
 							});
 							throw err;
 						}

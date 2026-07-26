@@ -18,6 +18,8 @@ type SessionData = {
 		version: string;
 	};
 	isConnected: boolean;
+	protocolEra?: 'legacy' | 'modern';
+	protocolVersion?: string;
 };
 
 /**
@@ -95,6 +97,20 @@ export function StdioTransportMetrics({ metrics }: StdioTransportMetricsProps) {
 					>
 						{clientDisplay}
 					</div>
+				);
+			},
+		},
+		{
+			id: 'protocol',
+			header: 'Protocol',
+			cell: ({ row }) => {
+				const session = row.original;
+				return session.protocolVersion ? (
+					<Badge variant={session.protocolEra === 'modern' ? 'success' : 'secondary'}>
+						{session.protocolEra ?? 'legacy'} · {session.protocolVersion}
+					</Badge>
+				) : (
+					<span className="text-muted-foreground">unknown</span>
 				);
 			},
 		},

@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { MetricsCounter, isInitializeRequest } from '../../src/shared/transport-metrics.js';
+import {
+	formatMetricsForAPI,
+	hashUserIdentity,
+	MetricsCounter,
+	isInitializeRequest,
+} from '../../src/shared/transport-metrics.js';
 
 describe('isInitializeRequest', () => {
 	it('should identify initialize requests', () => {
@@ -13,11 +18,56 @@ describe('MetricsCounter', () => {
 	it('tracks legacy and modern protocol requests independently', () => {
 		const metrics = new MetricsCounter();
 
-		metrics.trackProtocolEra('legacy');
-		metrics.trackProtocolEra('modern');
-		metrics.trackProtocolEra('modern');
+		metrics.trackProtocolRequest('legacy', '2025-06-18');
+		metrics.trackProtocolRequest('modern', '2026-07-28');
+		metrics.trackProtocolRequest('modern', '2026-07-28');
 
 		expect(metrics.getMetrics().protocolEras).toEqual({ legacy: 1, modern: 2 });
+		expect(metrics.getMetrics().protocolVersions.get('modern:2026-07-28')).toMatchObject({
+			requestCount: 2,
+			uniqueClients: 0,
+			uniqueUsers: 0,
+			unattributedRequests: 2,
+		});
+	});
+
+	it('aggregates exact protocols and hashed users by client', () => {
+		const metrics = new MetricsCounter();
+		const client = { name: 'test-client', version: '1.2.3' };
+		metrics.trackProtocolRequest('modern', '2026-07-28');
+		metrics.associateSessionWithClient(client);
+		metrics.trackClientProtocol(client, 'modern', '2026-07-28');
+		const userHash = metrics.trackAuthenticatedUser('Example-User', 'modern', '2026-07-28', client);
+		metrics.trackAuthenticatedUser('example-user', 'modern', '2026-07-28', client);
+
+		expect(userHash).toBe(hashUserIdentity('example-user'));
+		expect(userHash).not.toContain('example-user');
+		const response = formatMetricsForAPI(metrics.getMetrics(), 'streamableHttpJson', true);
+		expect(response.connections.uniqueUsers).toBe(1);
+		expect(response.protocolVersions).toEqual([
+			expect.objectContaining({
+				era: 'modern',
+				version: '2026-07-28',
+				requestCount: 1,
+				uniqueClients: 1,
+				uniqueUsers: 1,
+				unattributedRequests: 0,
+			}),
+		]);
+		expect(response.clients[0]).toMatchObject({
+			uniqueUserCount: 1,
+			protocols: [expect.objectContaining({ era: 'modern', version: '2026-07-28', requestCount: 1 })],
+		});
+	});
+
+	it('bounds unexpected protocol-version cardinality', () => {
+		const metrics = new MetricsCounter();
+		for (let index = 0; index < 40; index++) {
+			metrics.trackProtocolRequest('modern', `unexpected-${index}`);
+		}
+
+		expect(metrics.getMetrics().protocolVersions.size).toBe(33);
+		expect(metrics.getMetrics().protocolVersions.get('modern:__other__')?.requestCount).toBe(8);
 	});
 
 	it('buckets method details after too many distinct values for a base method', () => {

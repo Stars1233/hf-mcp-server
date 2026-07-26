@@ -34,6 +34,7 @@ export class StdioTransport extends BaseTransport {
 				requestCount: 0,
 				isAuthenticated: false, // STDIO doesn't have authentication headers
 				capabilities: {},
+				protocolEra: 'legacy',
 			},
 		};
 
@@ -62,14 +63,22 @@ export class StdioTransport extends BaseTransport {
 			server.server.oninitialized = () => {
 				const clientInfo = server.server.getClientVersion();
 				const clientCapabilities = server.server.getClientCapabilities();
+				session.metadata.protocolVersion = server.server.getNegotiatedProtocolVersion();
+				if (session.metadata.protocolVersion) {
+					this.trackProtocolRequest('legacy', session.metadata.protocolVersion);
+				}
 				if (clientInfo) {
 					if (session.metadata.clientInfo) {
 						this.metrics.disconnectClient(session.metadata.clientInfo);
 					}
 					session.metadata.clientInfo = clientInfo;
 					this.metrics.associateSessionWithClient(clientInfo);
+					if (session.metadata.protocolVersion) {
+						this.trackClientProtocol(clientInfo, 'legacy', session.metadata.protocolVersion);
+					}
 				}
 				if (clientCapabilities) {
+					session.metadata.clientCapabilities = clientCapabilities as Record<string, unknown>;
 					session.metadata.capabilities = {
 						sampling: !!clientCapabilities.sampling,
 						roots: !!clientCapabilities.roots,

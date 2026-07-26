@@ -341,6 +341,10 @@ function createToolHandler(
 	sessionInfo?: {
 		clientSessionId?: string;
 		requestId?: string;
+		protocolEra?: 'legacy' | 'modern';
+		protocolVersion?: string;
+		clientCapabilities?: Record<string, unknown>;
+		userHash?: string;
 		isAuthenticated?: boolean;
 		clientInfo?: { name: string; version: string };
 	},
@@ -355,6 +359,7 @@ function createToolHandler(
 		let success = false;
 		let error: string | undefined;
 		let responseSizeBytes: number | undefined;
+		let notificationCount = 0;
 
 		try {
 			// Validate MCP URL
@@ -362,7 +367,19 @@ function createToolHandler(
 				throw new Error('No MCP URL available for tool execution');
 			}
 
-			const result = await callGradioTool(connection.mcpUrl, tool.name, params, hfToken, createProgressRelay(extra));
+			const progressRelay = createProgressRelay(extra);
+			const result = await callGradioTool(
+				connection.mcpUrl,
+				tool.name,
+				params,
+				hfToken,
+				progressRelay
+					? async (progress) => {
+							notificationCount++;
+							await progressRelay(progress);
+						}
+					: undefined
+			);
 
 			// Calculate response size (rough estimate based on JSON serialization)
 			try {
@@ -458,6 +475,13 @@ function createToolHandler(
 				success,
 				error,
 				responseSizeBytes,
+				notificationCount,
+				clientSessionId: sessionInfo?.clientSessionId,
+				requestId: sessionInfo?.requestId,
+				protocolEra: sessionInfo?.protocolEra,
+				protocolVersion: sessionInfo?.protocolVersion,
+				clientCapabilities: sessionInfo?.clientCapabilities,
+				userHash: sessionInfo?.userHash,
 			});
 		}
 	};
@@ -472,6 +496,11 @@ export function registerRemoteTools(
 	hfToken?: string,
 	sessionInfo?: {
 		clientSessionId?: string;
+		requestId?: string;
+		protocolEra?: 'legacy' | 'modern';
+		protocolVersion?: string;
+		clientCapabilities?: Record<string, unknown>;
+		userHash?: string;
 		isAuthenticated?: boolean;
 		clientInfo?: { name: string; version: string };
 	},

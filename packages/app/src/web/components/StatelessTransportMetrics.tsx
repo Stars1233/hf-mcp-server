@@ -21,6 +21,14 @@ type ClientData = {
 	newIpCount: number;
 	anonCount: number;
 	uniqueAuthCount: number;
+	uniqueUserCount: number;
+	protocols: Array<{
+		era: 'legacy' | 'modern';
+		version: string;
+		requestCount: number;
+		firstSeen: string;
+		lastSeen: string;
+	}>;
 };
 
 /**
@@ -102,8 +110,25 @@ export function StatelessTransportMetrics({ metrics }: StatelessTransportMetrics
 			},
 		},
 		{
+			id: 'protocols',
+			header: 'Protocol',
+			cell: ({ row }) => (
+				<div className="flex flex-col gap-1">
+					{row.original.protocols.map((protocol) => (
+						<Badge
+							key={`${protocol.era}:${protocol.version}`}
+							variant={protocol.era === 'modern' ? 'success' : 'secondary'}
+							title={`${protocol.requestCount} requests`}
+						>
+							{protocol.era} · {protocol.version}
+						</Badge>
+					))}
+				</div>
+			),
+		},
+		{
 			accessorKey: 'requestCount',
-			header: createSortableHeader('Initializations', 'right'),
+			header: createSortableHeader('Requests', 'right'),
 			cell: ({ row }) => <div className="text-right font-mono text-sm">{row.getValue<number>('requestCount')}</div>,
 		},
 		{
@@ -118,12 +143,12 @@ export function StatelessTransportMetrics({ metrics }: StatelessTransportMetrics
 		},
 		{
 			accessorKey: 'anonCount',
-			header: createSortableHeader('Anon/Auth', 'right'),
+			header: createSortableHeader('Anon/Tokens/Users', 'right'),
 			cell: ({ row }) => {
 				const client = row.original;
 				return (
 					<div className="text-right font-mono text-sm">
-						{client.anonCount}/{client.uniqueAuthCount}
+						{client.anonCount}/{client.uniqueAuthCount}/{client.uniqueUserCount}
 					</div>
 				);
 			},
