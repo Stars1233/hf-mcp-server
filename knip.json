@@ -1,5 +1,5 @@
 {
-	"$schema": "https://unpkg.com/knip@5/schema.json",
+	"$schema": "https://unpkg.com/knip@6/schema.json",
 	"tags": ["-lintignore"],
 	"workspaces": {
 		".": {
@@ -10,7 +10,7 @@
 			"entry": [
 				"src/server/stdio.ts",
 				"src/server/streamableHttp.ts",
-				"src/web/main.tsx",
+				"src/server/utils/hf-dataset-transport.ts",
 				"src/web/mcp-welcome.tsx",
 				"src/web/gradio-widget.tsx",
 				"src/web/gradio-widget-dev.tsx",
@@ -20,11 +20,11 @@
 				"src/web/gradio-widget-dev.html"
 			],
 			"project": [
-				"src/**/*.{js,mjs,cjs,jsx,ts,tsx,mts,cts,html,css,svg}",
+				"src/**/*.{js,mjs,cjs,jsx,ts,tsx,mts,cts}",
 				"scripts/**/*.{js,mjs,cjs,jsx,ts,tsx,mts,cts}",
 				"vite.config.{js,mjs,cjs,ts,mts,cts}"
 			],
-			"ignoreDependencies": ["pino-pretty"]
+			"ignoreDependencies": ["tailwindcss"]
 		},
 		"packages/mcp": {
 			"project": ["src/**/*.{js,mjs,cjs,jsx,ts,tsx,mts,cts}", "test/**/*.{js,mjs,cjs,jsx,ts,tsx,mts,cts}"]

@@ -33,6 +33,8 @@ export function useSessionCache(activeSessions: SessionData[]): SessionData[] {
 		const now = new Date().toISOString();
 		const activeSessionIds = new Set(activeSessions.map((s) => s.id));
 
+		// The API response is an external snapshot; merge it into retained history when that snapshot changes.
+		// eslint-disable-next-line react-hooks/set-state-in-effect
 		setCachedSessions((prevCache) => {
 			const newCache = new Map(prevCache);
 

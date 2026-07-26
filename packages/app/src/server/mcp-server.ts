@@ -690,7 +690,6 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 
 					if (params.operation === 'invoke') {
 						const startTime = Date.now();
-						let success = false;
 
 						try {
 							const spaceTool = new SpaceTool(hfToken);
@@ -698,7 +697,7 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 
 							if ('result' in result && result.result) {
 								const invokeResult = result as InvokeResult;
-								success = !invokeResult.isError;
+								const success = !invokeResult.isError;
 
 								const stripImageContent = noImageContentHeaderEnabled || toolSelection.behaviorFlags.stripGradioImages;
 								const postProcessOptions: GradioToolCallOptions = {
@@ -747,7 +746,7 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 							}
 
 							const toolResult = result as ToolResult;
-							success = !toolResult.isError;
+							const success = !toolResult.isError;
 
 							const durationMs = Date.now() - startTime;
 							logToolQuery(dynamicSpaceToolConfig.name, loggedOperation, params, {

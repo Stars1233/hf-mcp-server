@@ -67,9 +67,9 @@ export function rewriteReplicaUrlsInResult(
 			const rewritten = rewriteText(item);
 			if (rewritten !== item) {
 				changed = true;
-				return { type: 'text', text: rewritten } as (typeof result.content)[number];
+				return { type: 'text', text: rewritten } satisfies (typeof result.content)[number];
 			}
-			return { type: 'text', text: item } as (typeof result.content)[number];
+			return { type: 'text', text: item } satisfies (typeof result.content)[number];
 		}
 
 		if (item && typeof item === 'object' && 'text' in item && typeof item.text === 'string') {
@@ -129,8 +129,7 @@ export async function callGradioToolWithHeaders(
 		if (typeof init?.body === 'string') {
 			try {
 				const parsed = JSON.parse(init.body) as
-					| { method?: unknown; id?: unknown }
-					| Array<{ method?: unknown; id?: unknown }>;
+					{ method?: unknown; id?: unknown } | Array<{ method?: unknown; id?: unknown }>;
 				if (Array.isArray(parsed)) {
 					requestSummary = {
 						isBatch: true,

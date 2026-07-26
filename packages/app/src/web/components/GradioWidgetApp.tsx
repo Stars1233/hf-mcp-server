@@ -1,4 +1,3 @@
-import { useMemo } from 'react';
 import { useWidgetProps, useMaxHeight, useTheme } from '../hooks';
 
 interface GradioToolOutput {
@@ -7,19 +6,9 @@ interface GradioToolOutput {
 	[key: string]: unknown;
 }
 
-const LOADING_ANIMATIONS = {
-	'huggy-pop': {
-		url: 'https://chunte-hfba.static.hf.space/images/modern%20Huggies/Huggy%20Pop.gif',
-		scale: 'scale-250',
-	},
-	vibing: {
-		url: 'https://chunte-hfba.static.hf.space/images/modern%20Huggies/Vibing%20Huggy.gif',
-		scale: 'scale-100',
-	},
-	doodle: {
-		url: 'https://chunte-hfba.static.hf.space/images/modern%20Huggies/Doodle%20Huggy.gif',
-		scale: 'scale-90',
-	},
+const LOADING_ANIMATION = {
+	url: 'https://chunte-hfba.static.hf.space/images/modern%20Huggies/Huggy%20Pop.gif',
+	scale: 'scale-250',
 };
 
 export function GradioWidgetApp() {
@@ -27,14 +16,6 @@ export function GradioWidgetApp() {
 	const toolOutput = useWidgetProps<GradioToolOutput>();
 	const maxHeight = useMaxHeight();
 	const theme = useTheme();
-
-	// Select loading animation with weighted randomness (60% Huggy Pop, 30% Vibing, 10% Doodle)
-	const loadingAnimation = useMemo(() => {
-		const rand = Math.random() * 100;
-		if (rand < 60) return LOADING_ANIMATIONS['huggy-pop'];
-		if (rand < 90) return LOADING_ANIMATIONS.vibing;
-		return LOADING_ANIMATIONS.doodle;
-	}, []);
 
 	// Determine content type based on URL
 	const isAudioUrl = toolOutput?.url?.match(/\.wav$/i);
@@ -64,9 +45,9 @@ export function GradioWidgetApp() {
 						<div className="flex justify-center mb-6">
 							<div className="w-32 h-32 overflow-hidden flex items-center justify-center">
 								<img
-									src={loadingAnimation.url}
+									src={LOADING_ANIMATION.url}
 									alt="Hugging Face"
-									className={`w-full h-full object-cover ${loadingAnimation.scale}`}
+									className={`w-full h-full object-cover ${LOADING_ANIMATION.scale}`}
 								/>
 							</div>
 						</div>

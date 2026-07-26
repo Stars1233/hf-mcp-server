@@ -60,7 +60,7 @@ export interface TransportMetrics {
 /**
  * Metrics per client identity (name@version)
  */
-export interface ClientMetrics {
+interface ClientMetrics {
 	name: string;
 	version: string;
 	requestCount: number;
@@ -86,7 +86,7 @@ interface ClientMethodMetrics {
 /**
  * Metrics per MCP method
  */
-export interface MethodMetrics {
+interface MethodMetrics {
 	method: string;
 	count: number;
 	firstCalled: Date;
@@ -99,7 +99,7 @@ export interface MethodMetrics {
 /**
  * API call metrics for external HuggingFace API calls
  */
-export interface ApiCallMetrics {
+interface ApiCallMetrics {
 	anonymous: number;
 	authenticated: number;
 	unauthorized: number; // 401
@@ -109,7 +109,7 @@ export interface ApiCallMetrics {
 /**
  * Gradio tool call metrics
  */
-export interface GradioToolMetrics {
+interface GradioToolMetrics {
 	success: number;
 	failure: number;
 	byTool: Record<string, { success: number; failure: number }>;
@@ -118,7 +118,7 @@ export interface GradioToolMetrics {
 /**
  * Gradio cache metrics for space metadata and schemas
  */
-export interface GradioCacheMetrics {
+interface GradioCacheMetrics {
 	spaceMetadata: {
 		hits: number;
 		misses: number;

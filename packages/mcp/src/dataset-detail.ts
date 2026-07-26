@@ -152,7 +152,7 @@ export class DatasetDetailTool {
 					msg.includes('Repository not found');
 
 				if (isNotFound) {
-					throw new Error(`Dataset '${datasetId}' not found. Please check the dataset ID.`);
+					throw new Error(`Dataset '${datasetId}' not found. Please check the dataset ID.`, { cause: error });
 				}
 
 				const isUnauthorized =
@@ -164,10 +164,12 @@ export class DatasetDetailTool {
 					msg.includes('Your access token must start with');
 
 				if (isUnauthorized) {
-					throw new Error(`Authentication required or insufficient permissions to access dataset '${datasetId}'.`);
+					throw new Error(`Authentication required or insufficient permissions to access dataset '${datasetId}'.`, {
+						cause: error,
+					});
 				}
 
-				throw new Error(`Failed to get dataset details: ${msg}`);
+				throw new Error(`Failed to get dataset details: ${msg}`, { cause: error });
 			}
 			throw error;
 		}

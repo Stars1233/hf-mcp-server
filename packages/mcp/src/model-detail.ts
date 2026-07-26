@@ -243,7 +243,7 @@ export class ModelDetailTool {
 					msg.includes('Repository not found');
 
 				if (isNotFound) {
-					throw new Error(`Model '${modelId}' not found. Please check the model ID.`);
+					throw new Error(`Model '${modelId}' not found. Please check the model ID.`, { cause: error });
 				}
 
 				const isUnauthorized =
@@ -255,10 +255,12 @@ export class ModelDetailTool {
 					msg.includes('Your access token must start with');
 
 				if (isUnauthorized) {
-					throw new Error(`Authentication required or insufficient permissions to access model '${modelId}'.`);
+					throw new Error(`Authentication required or insufficient permissions to access model '${modelId}'.`, {
+						cause: error,
+					});
 				}
 
-				throw new Error(`Failed to get model details: ${msg}`);
+				throw new Error(`Failed to get model details: ${msg}`, { cause: error });
 			}
 			throw error;
 		}

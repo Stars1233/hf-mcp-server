@@ -3,7 +3,7 @@ interface CommandRequest<Command extends string = string> {
 	args: string[];
 }
 
-export interface CommandOption {
+interface CommandOption {
 	key: string;
 	kind: 'boolean' | 'integer' | 'string';
 	nonEmpty?: boolean;

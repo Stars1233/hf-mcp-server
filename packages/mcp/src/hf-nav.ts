@@ -257,7 +257,8 @@ export class HfNavTool {
 				} catch (error) {
 					if (isEnoent(error)) {
 						throw new Error(
-							`ENOENT: no such collection ${parsed.owner}/${parsed.slug}; use search hf://collections with query or ls hf://collections/${encodeHfPathSegment(parsed.owner)}`
+							`ENOENT: no such collection ${parsed.owner}/${parsed.slug}; use search hf://collections with query or ls hf://collections/${encodeHfPathSegment(parsed.owner)}`,
+							{ cause: error }
 						);
 					}
 					throw error;

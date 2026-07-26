@@ -2,6 +2,7 @@ packages:
   - packages/mcp
   - packages/app
 allowBuilds:
+  '@modelcontextprotocol/ext-apps': false
   '@swc/core': true
   '@tailwindcss/oxide': true
   esbuild: true

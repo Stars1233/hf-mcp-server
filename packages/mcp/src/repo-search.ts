@@ -155,7 +155,7 @@ export class RepoSearchTool extends HfApiCall<Record<string, string>, unknown> {
 			return formatSearchResults(searchBatches, params, repoTypes);
 		} catch (error) {
 			if (error instanceof Error) {
-				throw new Error(`Failed to search repositories: ${error.message}`);
+				throw new Error(`Failed to search repositories: ${error.message}`, { cause: error });
 			}
 			throw error;
 		}

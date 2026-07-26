@@ -104,7 +104,7 @@ export function parseSchemaResponse(
 	} catch (error) {
 		if (error instanceof Error && error.message.includes('no tools found')) {
 			// Preserve legacy error wording expected by tests/callers
-			throw new Error('No tools found in schema');
+			throw new Error('No tools found in schema', { cause: error });
 		}
 		logger.error(
 			{
@@ -275,13 +275,11 @@ export async function connectToGradioEndpoints(
 		const endpointId = `endpoint${(originalIndex + 1).toString()}`;
 
 		return Promise.race([fetchEndpointSchema(endpoint, originalIndex, hfToken), createTimeout(CONNECTION_TIMEOUT_MS)])
-			.then(
-				(connection): EndpointConnectionResult => ({
-					success: true,
-					endpointId,
-					connection,
-				})
-			)
+			.then((connection): EndpointConnectionResult => ({
+				success: true,
+				endpointId,
+				connection,
+			}))
 			.catch((error: unknown): EndpointConnectionResult => {
 				const isFirstError = gradioMetrics.schemaFetchError(endpoint.name);
 				const logLevel = isFirstError ? 'warn' : 'trace';

@@ -89,7 +89,7 @@ export class WebServer {
 
 		this.app.use(cors(corsOptions));
 		// Ensure preflight requests succeed for any path
-		this.app.options('*', cors(corsOptions));
+		this.app.options('{*splat}', cors(corsOptions));
 	}
 
 	public getApp(): Express {
@@ -173,7 +173,7 @@ export class WebServer {
 			this.app.use(express.static(staticPath));
 
 			// Fallback to index.html for SPA routing
-			this.app.get('*', (req, res) => {
+			this.app.get('{*splat}', (req, res) => {
 				if (!req.path.startsWith('/api/')) {
 					res.sendFile(path.join(staticPath, 'index.html'));
 				}

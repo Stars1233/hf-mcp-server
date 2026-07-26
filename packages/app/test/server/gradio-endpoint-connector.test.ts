@@ -1,8 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import {
-	parseSchemaResponse,
-	convertJsonSchemaToZod,
-} from '../../src/server/gradio-endpoint-connector.js';
+import { parseSchemaResponse, convertJsonSchemaToZod } from '../../src/server/gradio-endpoint-connector.js';
 import { stripImageContentFromResult } from '../../src/server/utils/gradio-result-processor.js';
 import { z } from 'zod';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -364,7 +361,7 @@ describe('convertJsonSchemaToZod', () => {
 
 		// Should be a string schema with description
 		expect(zodSchema instanceof z.ZodString).toBe(true);
-		expect((zodSchema as z.ZodString)._def.description).toBe('a http or https url to a file');
+		expect((zodSchema as z.ZodString).description).toBe('a http or https url to a file');
 
 		// Test validation
 		expect(zodSchema.parse('https://example.com/image.jpg')).toBe('https://example.com/image.jpg');
@@ -381,10 +378,8 @@ describe('convertJsonSchemaToZod', () => {
 		const zodSchema = convertJsonSchemaToZod(jsonSchema);
 
 		expect(zodSchema instanceof z.ZodDefault).toBe(true);
-		expect((zodSchema as z.ZodDefault<z.ZodNumber>)._def.defaultValue()).toBe(0.05);
-		expect((zodSchema as z.ZodDefault<z.ZodNumber>)._def.innerType._def.description).toBe(
-			'numeric value between 0.01 and 1.0'
-		);
+		expect((zodSchema as z.ZodDefault<z.ZodNumber>).parse(undefined)).toBe(0.05);
+		expect((zodSchema as z.ZodDefault<z.ZodNumber>).unwrap().description).toBe('numeric value between 0.01 and 1.0');
 	});
 
 	it('should convert integer type with default', () => {
@@ -397,9 +392,9 @@ describe('convertJsonSchemaToZod', () => {
 		const zodSchema = convertJsonSchemaToZod(jsonSchema);
 
 		expect(zodSchema instanceof z.ZodDefault).toBe(true);
-		expect((zodSchema as z.ZodDefault<z.ZodNumber>)._def.defaultValue()).toBe(42);
-		expect((zodSchema as z.ZodDefault<z.ZodNumber>)._def.innerType.parse(42)).toBe(42);
-		expect(() => (zodSchema as z.ZodDefault<z.ZodNumber>)._def.innerType.parse(42.5)).toThrow();
+		expect((zodSchema as z.ZodDefault<z.ZodNumber>).parse(undefined)).toBe(42);
+		expect((zodSchema as z.ZodDefault<z.ZodNumber>).unwrap().parse(42)).toBe(42);
+		expect(() => (zodSchema as z.ZodDefault<z.ZodNumber>).unwrap().parse(42.5)).toThrow();
 	});
 
 	it('should convert boolean type with default', () => {
@@ -411,7 +406,7 @@ describe('convertJsonSchemaToZod', () => {
 		const zodSchema = convertJsonSchemaToZod(jsonSchema);
 
 		expect(zodSchema instanceof z.ZodDefault).toBe(true);
-		expect((zodSchema as z.ZodDefault<z.ZodBoolean>)._def.defaultValue()).toBe(true);
+		expect((zodSchema as z.ZodDefault<z.ZodBoolean>).parse(undefined)).toBe(true);
 	});
 
 	it('should skip default when skipDefault is true', () => {
@@ -518,7 +513,7 @@ describe('convertJsonSchemaToZod', () => {
 
 		// Should create object schema for FileData
 		expect(zodSchema instanceof z.ZodDefault).toBe(true);
-		const innerSchema = (zodSchema as z.ZodDefault<z.ZodObject<z.ZodRawShape>>)._def.innerType;
+		const innerSchema = (zodSchema as z.ZodDefault<z.ZodObject<z.ZodRawShape>>).unwrap();
 		expect(innerSchema instanceof z.ZodObject).toBe(true);
 
 		// Test parsing
@@ -550,7 +545,7 @@ describe('convertJsonSchemaToZod', () => {
 		const zodSchema = convertJsonSchemaToZod(jsonSchema);
 
 		expect(zodSchema instanceof z.ZodDefault).toBe(true);
-		expect((zodSchema as z.ZodDefault<z.ZodString>)._def.defaultValue()).toBe('https://example.com/default.jpg');
+		expect((zodSchema as z.ZodDefault<z.ZodString>).parse(undefined)).toBe('https://example.com/default.jpg');
 	});
 
 	it('should handle array and object types', () => {

@@ -3,7 +3,7 @@ import { parseCommandArgs, type CommandOptionMap } from './command-args.js';
 
 export const HF_FS_OPERATIONS = ['ls', 'cat', 'stat', 'find', 'search'] as const;
 export const HF_FS_ENTRY_TYPES = ['file', 'dir', 'repo', 'bucket', 'collection', 'paper', 'link'] as const;
-export const HF_FS_SEARCH_SORTS = [
+const HF_FS_SEARCH_SORTS = [
 	'createdAt',
 	'downloads',
 	'likes',

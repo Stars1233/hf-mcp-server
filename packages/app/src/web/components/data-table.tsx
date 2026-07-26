@@ -46,6 +46,8 @@ export function DataTable<TData, TValue>({
 	const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>(defaultColumnVisibility);
 	const [rowSelection, setRowSelection] = React.useState({});
 
+	// TanStack Table intentionally manages mutable callbacks; React Compiler skips this component safely.
+	// eslint-disable-next-line react-hooks/incompatible-library
 	const table = useReactTable({
 		data,
 		columns,

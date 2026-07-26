@@ -21,14 +21,14 @@
 		"e2e:hf-fs:live": "./scripts/test-hf-fs-live.sh .env.test",
 		"buildrun": "pnpm run clean && pnpm run build && pnpm run lint:check && pnpm run test && pnpm run start",
 		"prepublishOnly": "pnpm run build",
-		"knip": "knip --include files,dependencies,devDependencies,unlisted,exports,types --treat-config-hints-as-errors"
+		"knip": "knip --include files,dependencies,devDependencies,unlisted,exports,types --no-config-hints"
 	},
 	"devDependencies": {
 		"@modelcontextprotocol/sdk": "^1.29.0",
-		"@types/node": "^25.3.0",
-		"concurrently": "^9.2.0",
-		"knip": "^5.85.0",
-		"prettier": "^3.6.2",
-		"typescript": "~5.9.2"
+		"@types/node": "^26.1.1",
+		"concurrently": "^10.0.4",
+		"knip": "^6.29.0",
+		"prettier": "^3.9.6",
+		"typescript": "~6.0.3"
 	}
 }

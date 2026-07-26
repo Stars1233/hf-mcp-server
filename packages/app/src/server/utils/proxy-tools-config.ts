@@ -30,7 +30,7 @@ export interface ProxyToolInputSchema {
 	[key: string]: unknown;
 }
 
-export interface ProxyToolSchemaProperty {
+interface ProxyToolSchemaProperty {
 	type?: string;
 	description?: string;
 	default?: unknown;
@@ -68,7 +68,7 @@ export async function loadProxyToolsConfig(): Promise<ProxyToolDefinition[]> {
 			return cachedTools;
 		}
 
-		let content: string | null = null;
+		let content: string;
 		if (source.startsWith('https://')) {
 			try {
 				const { response } = await fetchWithProfile(source, PROXY_CSV_SOURCE_PROFILE, {

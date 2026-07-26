@@ -14,7 +14,7 @@ import {
 	scheduledSuspendCommand,
 	scheduledResumeCommand,
 } from './commands/scheduled.js';
-import { formatCommandHelp, extractFieldDetails, type AnyZodType } from './schema-help.js';
+import { formatCommandHelp, extractFieldDetails } from './schema-help.js';
 import type { ToolResult } from '../types/tool-result.js';
 import { CPU_FLAVORS, GPU_FLAVORS, SPECIALIZED_FLAVORS } from './types.js';
 import { DEFAULT_LOG_WAIT_SECONDS } from './sse-handler.js';
@@ -227,7 +227,7 @@ function operationRequiresArgs(operation: OperationName): boolean {
 		return false;
 	}
 
-	const fields = extractFieldDetails(schema as AnyZodType);
+	const fields = extractFieldDetails(schema);
 	const requiresArgs = fields.some((field) => !field.isOptional);
 	operationRequiresArgsCache.set(operation, requiresArgs);
 	return requiresArgs;
@@ -267,17 +267,17 @@ function validateArgs<T extends z.ZodTypeAny>(
 	const result = schema.safeParse(args);
 
 	if (result.success) {
-		return { success: true, data: result.data as z.infer<T> };
+		return { success: true, data: result.data };
 	}
 
 	// Format Zod errors into a helpful message
-	const errors = result.error.errors;
+	const errors = result.error.issues;
 	const missingFields: string[] = [];
 	const invalidFields: string[] = [];
 
 	for (const err of errors) {
 		const field = err.path.join('.');
-		if (err.code === 'invalid_type' && err.received === 'undefined') {
+		if (err.code === 'invalid_type' && err.input === undefined) {
 			missingFields.push(`  • ${field}: ${err.message}`);
 		} else {
 			invalidFields.push(`  • ${field}: ${err.message}`);
@@ -443,7 +443,7 @@ export const HF_JOBS_TOOL_CONFIG = {
 			.enum(OPERATION_NAMES)
 			.optional()
 			.describe(`Operation to execute. Valid values: ${OPERATION_NAMES.map((cmd) => `"${cmd}"`).join(', ')}`),
-		args: z.record(z.any()).optional().describe('Operation-specific arguments as a JSON object'),
+		args: z.record(z.string(), z.unknown()).optional().describe('Operation-specific arguments as a JSON object'),
 	}),
 	annotations: {
 		title: 'Hugging Face Jobs', // omit destructive hint.
@@ -501,7 +501,7 @@ export class HfJobsTool {
 		}
 
 		const operation = normalizedOperation;
-		const legacyArgs = extractTopLevelArgs(params as Record<string, unknown>);
+		const legacyArgs = extractTopLevelArgs(params);
 		const rawArgs = params.args ? params.args : Object.keys(legacyArgs).length > 0 ? legacyArgs : {};
 		const schema = OPERATION_SCHEMAS[operation];
 		const noArgsProvided = !params.args || Object.keys(params.args).length === 0;

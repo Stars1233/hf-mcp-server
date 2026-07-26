@@ -17,11 +17,17 @@ import type {
 	ListFileEntry,
 	ModelEntry,
 	PathInfo,
-	RepoDesignation,
-	RepoType,
+	RepoType as HubRepoType,
 	SpaceEntry,
 } from '@huggingface/hub';
 import picomatch from 'picomatch';
+
+type RepoType = Exclude<HubRepoType, 'kernel'>;
+interface RepoDesignation {
+	name: string;
+	type: RepoType;
+}
+
 import { safeFetch } from './network/safe-fetch.js';
 import { createHuggingFaceHubPolicy } from './network/url-policy.js';
 import { assertTextFilePath, decodeTextFileContent } from './text-file-policy.js';

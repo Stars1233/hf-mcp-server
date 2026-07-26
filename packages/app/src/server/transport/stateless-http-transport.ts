@@ -50,8 +50,7 @@ interface JsonRpcRequestBody {
 function isErrorResponseBody(body: string): boolean {
 	try {
 		const parsed = JSON.parse(body) as
-			| { error?: unknown; result?: { isError?: unknown } }
-			| { error?: unknown; result?: { isError?: unknown } }[];
+			{ error?: unknown; result?: { isError?: unknown } } | { error?: unknown; result?: { isError?: unknown } }[];
 		const responses = Array.isArray(parsed) ? parsed : [parsed];
 		return responses.some((response) => response.error !== undefined || response.result?.isError === true);
 	} catch {
@@ -206,9 +205,9 @@ export class StatelessHttpTransport extends BaseTransport {
 	}
 
 	override initialize(): Promise<void> {
-		this.app.post('/mcp', (req: Request, res: Response) => {
+		this.app.post('/mcp', async (req: Request, res: Response) => {
 			this.trackRequest();
-			void this.handleJsonRpcRequest(req, res);
+			await this.handleJsonRpcRequest(req, res);
 		});
 
 		// Serve the MCP welcome page on GET requests (or 405 if strict compliance is enabled)
@@ -244,9 +243,9 @@ export class StatelessHttpTransport extends BaseTransport {
 		});
 
 		// Handle DELETE requests for analytics tracking
-		this.app.delete('/mcp', (req: Request, res: Response) => {
+		this.app.delete('/mcp', async (req: Request, res: Response) => {
 			this.trackRequest();
-			void this.handleDeleteRequest(req, res);
+			await this.handleDeleteRequest(req, res);
 		});
 
 		logger.info('HTTP JSON transport initialized (stateless mode)');
@@ -269,8 +268,7 @@ export class StatelessHttpTransport extends BaseTransport {
 
 		// Extract method name for tracking using shared utility
 		const requestBody = req.body as
-			| { method?: string; params?: { clientInfo?: unknown; capabilities?: unknown; name?: string } }
-			| undefined;
+			{ method?: string; params?: { clientInfo?: unknown; capabilities?: unknown; name?: string } } | undefined;
 
 		const trackingName = this.extractMethodForTracking(requestBody);
 
