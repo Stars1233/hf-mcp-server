@@ -6,10 +6,11 @@ import {
 	StatelessHttpTransport,
 } from '../../../src/server/transport/stateless-http-transport.js';
 import type { ServerFactory } from '../../../src/server/transport/base-transport.js';
+import { McpServer } from '@modelcontextprotocol/server';
 import { formatMetricsForAPI } from '../../../src/shared/transport-metrics.js';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import express from 'express';
 import { createProgressRelay } from '../../../src/server/utils/progress-relay.js';
+import { z } from 'zod';
 
 describe('MetricsResponseCapture', () => {
 	it('detects JSON-RPC and tool errors in bounded responses', () => {
@@ -270,10 +271,10 @@ describe('StatelessHttpTransport', () => {
 					'progress_test',
 					{
 						description: 'Emits progress for transport testing.',
-						inputSchema: {},
+						inputSchema: z.object({}),
 					},
-					async (_params, extra) => {
-						await createProgressRelay(extra)?.({ progress: 1, total: 2, message: 'Halfway' });
+					async (_params, ctx) => {
+						await createProgressRelay(ctx)?.({ progress: 1, total: 2, message: 'Halfway' });
 						return { content: [{ type: 'text', text: 'done' }] };
 					}
 				);
@@ -409,7 +410,7 @@ describe('StatelessHttpTransport', () => {
 				});
 				expect(unknownToolResponse.status).toBe(200);
 				expect(await unknownToolResponse.json()).toMatchObject({
-					result: { isError: true, content: expect.any(Array) },
+					error: { code: -32602, message: 'Tool missing_tool not found' },
 				});
 				expect(transport.getMetrics().methods.get('tools/call:missing_tool')).toMatchObject({
 					count: 1,

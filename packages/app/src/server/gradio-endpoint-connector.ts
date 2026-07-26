@@ -1,7 +1,5 @@
-import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js';
-import type { CallToolResult, ServerNotification, ServerRequest, Tool } from '@modelcontextprotocol/sdk/types.js';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { Client } from '@modelcontextprotocol/client';
+import type { CallToolResult, McpServer, ServerContext, Tool } from '@modelcontextprotocol/server';
 import { logger } from './utils/logger.js';
 import { logGradioEvent } from './utils/query-logger.js';
 import { z } from 'zod';
@@ -236,7 +234,7 @@ async function fetchEndpointSchema(
 				properties: parsedTool.inputSchema.properties || {},
 				required: parsedTool.inputSchema.required || [],
 				description: parsedTool.inputSchema.description,
-			},
+			} as Tool['inputSchema'],
 		}));
 
 	return {
@@ -346,10 +344,7 @@ function createToolHandler(
 		clientInfo?: { name: string; version: string };
 	},
 	options: RegisterRemoteToolsOptions = {}
-): (
-	params: Record<string, unknown>,
-	extra: RequestHandlerExtra<ServerRequest, ServerNotification>
-) => Promise<CallToolResult> {
+): (params: Record<string, unknown>, extra: ServerContext) => Promise<CallToolResult> {
 	return async (params: Record<string, unknown>, extra) => {
 		logger.info({ tool: tool.name, params }, 'Calling remote tool');
 
@@ -529,7 +524,7 @@ export function registerRemoteTools(
 			{
 				title: title,
 				description,
-				inputSchema: schemaShape,
+				inputSchema: z.object(schemaShape),
 				annotations: {
 					openWorldHint: true,
 					title: title,

@@ -1,5 +1,5 @@
 import type { ToolResult } from '../../types/tool-result.js';
-import type { Tool } from '@modelcontextprotocol/sdk/types.js';
+import type { Tool } from '@modelcontextprotocol/client';
 import { analyzeSchemaComplexity } from '../utils/schema-validator.js';
 import { formatParameters, formatComplexSchemaError } from '../utils/parameter-formatter.js';
 import { fetchGradioSchema, fetchSpaceMetadata } from '../utils/space-http.js';

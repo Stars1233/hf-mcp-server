@@ -1,11 +1,11 @@
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import {
-	StreamableHTTPClientTransport,
-	type StreamableHTTPClientTransportOptions,
-} from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { CallToolResultSchema, type CallToolResult, type Progress } from '@modelcontextprotocol/sdk/types.js';
-import { Protocol, type RequestOptions } from '@modelcontextprotocol/sdk/shared/protocol.js';
-import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import { Client, StreamableHTTPClientTransport, Protocol } from '@modelcontextprotocol/client';
+import type {
+	StreamableHTTPClientTransportOptions,
+	CallToolResult,
+	Progress,
+	RequestOptions,
+	Transport,
+} from '@modelcontextprotocol/client';
 import { logger } from '../../logger.js';
 import { fetchWithProfile, NETWORK_FETCH_PROFILES } from '../../network/fetch-profile.js';
 import { createGradioMcpPolicy, parseAndValidateUrl } from '../../network/url-policy.js';
@@ -262,7 +262,6 @@ export async function callGradioToolWithHeaders(
 					_meta: { progressToken },
 				},
 			},
-			CallToolResultSchema,
 			requestOptions
 		);
 		logger.trace('[gradio] tool request completed', { toolName, isError: result.isError });

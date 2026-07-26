@@ -1,5 +1,4 @@
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createServerFactory } from '../../src/server/mcp-server.js';
 import { WebServer } from '../../src/server/web-server.js';
@@ -70,7 +69,6 @@ describe('Jobs progress wiring', () => {
 					name: 'hf_jobs',
 					arguments: { operation: 'logs', args: { job_id: 'job-123' } },
 				},
-				undefined,
 				{
 					onprogress: (update) => {
 						progress.push(update);

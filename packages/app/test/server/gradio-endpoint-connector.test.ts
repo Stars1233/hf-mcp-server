@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { parseSchemaResponse, convertJsonSchemaToZod } from '../../src/server/gradio-endpoint-connector.js';
 import { stripImageContentFromResult } from '../../src/server/utils/gradio-result-processor.js';
 import { z } from 'zod';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { CallToolResult } from '@modelcontextprotocol/server';
 
 describe('parseSchemaResponse', () => {
 	const endpointId = 'endpoint1';

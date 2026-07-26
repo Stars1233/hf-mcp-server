@@ -1,8 +1,5 @@
-import type { CallToolResult, Progress, ReadResourceResult } from '@modelcontextprotocol/sdk/types.js';
-import { CallToolResultSchema, ReadResourceResultSchema } from '@modelcontextprotocol/sdk/types.js';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import type { RequestOptions } from '@modelcontextprotocol/sdk/shared/protocol.js';
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+import type { CallToolResult, Progress, ReadResourceResult, RequestOptions } from '@modelcontextprotocol/client';
 import { fetchWithProfile, NETWORK_FETCH_PROFILES, parseAndValidateUrl } from '@llmindset/hf-mcp/network';
 import { logger } from './logger.js';
 
@@ -89,7 +86,6 @@ export async function callStreamableHttpTool(
 					_meta: { progressToken },
 				},
 			},
-			CallToolResultSchema,
 			requestOptions
 		);
 
@@ -148,15 +144,12 @@ export async function readStreamableHttpResource(
 	logger.trace({ serverUrl, resourceUri }, 'Streamable proxy connected upstream for resource read');
 
 	try {
-		return await client.request(
-			{
-				method: 'resources/read',
-				params: {
-					uri: resourceUri,
-				},
+		return await client.request({
+			method: 'resources/read',
+			params: {
+				uri: resourceUri,
 			},
-			ReadResourceResultSchema
-		);
+		});
 	} finally {
 		await client.close();
 	}

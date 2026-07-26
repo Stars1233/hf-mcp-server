@@ -1,9 +1,8 @@
-import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js';
-import type { ServerNotification, ServerRequest } from '@modelcontextprotocol/sdk/types.js';
+import type { ServerContext } from '@modelcontextprotocol/server';
 import { describe, expect, it, vi } from 'vitest';
 import { createProgressRelay } from '../../../src/server/utils/progress-relay.js';
 
-type HandlerExtra = RequestHandlerExtra<ServerRequest, ServerNotification>;
+type HandlerExtra = ServerContext;
 
 function makeExtra(
 	progressToken: unknown,
@@ -11,9 +10,11 @@ function makeExtra(
 	signal = new AbortController().signal
 ): { extra: HandlerExtra; sendNotification: typeof sendNotification } {
 	const extra = {
-		_meta: { progressToken },
-		signal,
-		sendNotification,
+		mcpReq: {
+			_meta: { progressToken },
+			signal,
+			notify: sendNotification,
+		},
 	} as unknown as HandlerExtra;
 
 	return { extra, sendNotification };

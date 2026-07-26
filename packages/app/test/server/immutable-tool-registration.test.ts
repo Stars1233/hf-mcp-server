@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import type { ServerCapabilities } from '@modelcontextprotocol/sdk/types.js';
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
+import type { ServerCapabilities } from '@modelcontextprotocol/client';
 import { HF_FS_TOOL_ID, REPO_SEARCH_TOOL_ID } from '@llmindset/hf-mcp';
 import { createServerFactory } from '../../src/server/mcp-server.js';
 import { WebServer } from '../../src/server/web-server.js';

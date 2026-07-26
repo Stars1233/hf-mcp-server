@@ -8,10 +8,8 @@ import { extractAuthBouquetAndMix } from './utils/auth-utils.js';
 import { parseGradioSpaceIds } from './utils/gradio-utils.js';
 import { getGradioSpaces } from './utils/gradio-discovery.js';
 import { logToolQuery, type QueryLoggerOptions } from './utils/query-logger.js';
-import type { z } from 'zod';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js';
-import type { ServerNotification, ServerRequest } from '@modelcontextprotocol/sdk/types.js';
+import { z } from 'zod';
+import type { McpServer, ServerContext } from '@modelcontextprotocol/server';
 import { createRequire } from 'module';
 import { createGradioWidgetResourceConfig } from './resources/gradio-widget-resource.js';
 import { callStreamableHttpTool, readStreamableHttpResource } from './utils/streamable-http-tool-caller.js';
@@ -57,10 +55,7 @@ function registerProxyToolsFromConfig(
 		const title = config.proxyId ? `${config.proxyId} - ${config.upstreamToolName}` : config.toolName;
 		const schemaShape = buildProxyToolSchemaShape(config.inputSchema);
 		const { meta, resourceMapping } = rewriteProxyAppToolMeta(config.meta, config.proxyId, config.upstreamToolName);
-		const handler = async (
-			params: Record<string, unknown>,
-			extra: RequestHandlerExtra<ServerRequest, ServerNotification>
-		) => {
+		const handler = async (params: Record<string, unknown>, extra: ServerContext) => {
 			const start = performance.now();
 			logger.trace(
 				{
@@ -106,7 +101,7 @@ function registerProxyToolsFromConfig(
 				{
 					title,
 					description,
-					inputSchema: schemaShape,
+					inputSchema: z.object(schemaShape),
 					annotations: {
 						openWorldHint: true,
 						title,

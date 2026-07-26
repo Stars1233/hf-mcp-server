@@ -2,14 +2,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { loadSkills } from '../../src/server/skills/skill-loader.js';
 import { registerSkillResources } from '../../src/server/skills/skill-resources.js';
 import { RESOURCES_DIRECTORY_READ_METHOD } from '../../src/server/skills/skill-directory-schema.js';
 
 type ResourceContent = { uri: string; mimeType: string; text?: string; blob?: string };
 type ResourceHandler = () => Promise<{ contents: ResourceContent[] }>;
-type RequestHandler = (request: { method: string; params: Record<string, unknown> }) => unknown;
+type RequestHandler = (params: Record<string, unknown>) => unknown;
 
 interface Registration {
 	name: string;
@@ -26,8 +26,8 @@ function makeMockServer(): {
 	const calls: Registration[] = [];
 	const requestHandlers = new Map<string, RequestHandler>();
 	const inner = {
-		setRequestHandler(schema: { shape: { method: { value: string } } }, handler: RequestHandler) {
-			requestHandlers.set(schema.shape.method.value, handler);
+		setRequestHandler(method: string, _schemas: { params: unknown; result?: unknown }, handler: RequestHandler) {
+			requestHandlers.set(method, handler);
 		},
 	};
 	const server = {
@@ -59,7 +59,7 @@ async function buildAlphaSkill(root: string): Promise<void> {
 				},
 			],
 		}),
-		'utf8',
+		'utf8'
 	);
 }
 
@@ -139,10 +139,9 @@ describe('registerSkillResources', () => {
 		const handler = requestHandlers.get(RESOURCES_DIRECTORY_READ_METHOD)!;
 		expect(handler).toBeDefined();
 
-		const rootListing = handler({
-			method: RESOURCES_DIRECTORY_READ_METHOD,
-			params: { uri: 'skill://alpha' },
-		}) as { resources: { uri: string; mimeType: string }[] };
+		const rootListing = handler({ uri: 'skill://alpha' }) as {
+			resources: { uri: string; mimeType: string }[];
+		};
 		expect(rootListing.resources).toContainEqual({
 			uri: 'skill://alpha/references',
 			name: 'references',
@@ -150,8 +149,6 @@ describe('registerSkillResources', () => {
 		});
 
 		// Non-directory URI → JSON-RPC InvalidParams (-32602).
-		expect(() =>
-			handler({ method: RESOURCES_DIRECTORY_READ_METHOD, params: { uri: 'skill://alpha/SKILL.md' } }),
-		).toThrowError(/Not a directory/);
+		expect(() => handler({ uri: 'skill://alpha/SKILL.md' })).toThrowError(/Not a directory/);
 	});
 });

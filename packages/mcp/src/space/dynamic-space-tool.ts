@@ -1,5 +1,5 @@
 import type { ToolResult } from '../types/tool-result.js';
-import type { Progress } from '@modelcontextprotocol/sdk/types.js';
+import type { Progress } from '@modelcontextprotocol/client';
 import type { z } from 'zod';
 import {
 	spaceArgsSchema,

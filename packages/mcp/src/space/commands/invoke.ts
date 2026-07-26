@@ -1,6 +1,6 @@
 import type { ToolResult } from '../../types/tool-result.js';
 import type { InvokeResult } from '../types.js';
-import type { Progress, Tool } from '@modelcontextprotocol/sdk/types.js';
+import type { Progress, Tool } from '@modelcontextprotocol/client';
 import { analyzeSchemaComplexity, validateParameters, applyDefaults } from '../utils/schema-validator.js';
 import { formatComplexSchemaError, formatValidationError } from '../utils/parameter-formatter.js';
 import { callGradioToolWithHeaders } from '../utils/gradio-caller.js';

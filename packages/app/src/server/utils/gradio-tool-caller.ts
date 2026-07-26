@@ -1,4 +1,4 @@
-import type { CallToolResult, Progress } from '@modelcontextprotocol/sdk/types.js';
+import type { CallToolResult, Progress } from '@modelcontextprotocol/server';
 import { callGradioToolWithHeaders } from '@llmindset/hf-mcp';
 import { logger } from './logger.js';
 import { stripImageContentFromResult, extractUrlFromContent } from './gradio-result-processor.js';

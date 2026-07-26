@@ -1,6 +1,6 @@
 import { BaseTransport, type SessionMetadata } from './base-transport.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
+import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import { logger } from '../utils/logger.js';
 
 interface StdioSession {

@@ -1,4 +1,4 @@
-import type { Tool } from '@modelcontextprotocol/sdk/types.js';
+import type { Tool } from '@modelcontextprotocol/client';
 
 export type ParsedSchemaFormat = 'array' | 'object';
 
@@ -18,15 +18,17 @@ export interface ParsedGradioSchema {
 export function parseGradioSchemaResponse(schemaResponse: unknown): ParsedGradioSchema {
 	// Array format
 	if (Array.isArray(schemaResponse)) {
-		const tools = (schemaResponse as Array<unknown>).filter((tool): tool is { name: string; description?: string; inputSchema: unknown } => {
-			return (
-				typeof tool === 'object' &&
-				tool !== null &&
-				'name' in tool &&
-				typeof (tool as { name?: unknown }).name === 'string' &&
-				'inputSchema' in tool
-			);
-		});
+		const tools = (schemaResponse as Array<unknown>).filter(
+			(tool): tool is { name: string; description?: string; inputSchema: unknown } => {
+				return (
+					typeof tool === 'object' &&
+					tool !== null &&
+					'name' in tool &&
+					typeof (tool as { name?: unknown }).name === 'string' &&
+					'inputSchema' in tool
+				);
+			}
+		);
 
 		if (tools.length === 0) {
 			throw new Error('Invalid schema: no tools found in array schema');
@@ -43,7 +45,10 @@ export function parseGradioSchemaResponse(schemaResponse: unknown): ParsedGradio
 		const entries = Object.entries(schemaResponse as Record<string, unknown>);
 		const tools: ParsedGradioSchema['tools'] = entries.map(([name, toolSchema]) => ({
 			name,
-			description: typeof (toolSchema as { description?: unknown }).description === 'string' ? (toolSchema as { description?: string }).description : undefined,
+			description:
+				typeof (toolSchema as { description?: unknown }).description === 'string'
+					? (toolSchema as { description?: string }).description
+					: undefined,
 			inputSchema: toolSchema,
 		}));
 

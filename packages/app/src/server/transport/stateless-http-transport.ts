@@ -1,12 +1,11 @@
 import { BaseTransport, type SessionMetadata, type ServerFactory } from './base-transport.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { McpServer, isJSONRPCNotification } from '@modelcontextprotocol/server';
+import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node';
 import { logger } from '../utils/logger.js';
 import type { Request, Response, Express } from 'express';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { JsonRpcErrors, extractJsonRpcId } from './json-rpc-errors.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { isJSONRPCNotification } from '@modelcontextprotocol/sdk/types.js';
 import { extractQueryParamsToHeaders } from '../utils/query-params.js';
 import { isBrowser } from '../utils/browser-detection.js';
 import { buildOAuthResourceHeader } from '../utils/oauth-resource.js';
@@ -316,7 +315,7 @@ export class StatelessHttpTransport extends BaseTransport {
 	private async handleJsonRpcRequest(req: Request, res: Response): Promise<void> {
 		const startTime = Date.now();
 		let server: McpServer | null = null;
-		let transport: StreamableHTTPServerTransport | null = null;
+		let transport: NodeStreamableHTTPServerTransport | null = null;
 		let sessionId: string | undefined;
 
 		// Check HF token validity if present
@@ -535,7 +534,7 @@ export class StatelessHttpTransport extends BaseTransport {
 			}
 
 			// Create new transport instance for this request
-			transport = new StreamableHTTPServerTransport({
+			transport = new NodeStreamableHTTPServerTransport({
 				sessionIdGenerator: undefined,
 				enableJsonResponse: !this.requestsProgress(requestBody),
 			});

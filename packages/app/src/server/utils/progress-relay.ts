@@ -1,5 +1,4 @@
-import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js';
-import type { ServerNotification, ServerRequest } from '@modelcontextprotocol/sdk/types.js';
+import type { ServerContext } from '@modelcontextprotocol/server';
 import { logger } from './logger.js';
 
 interface ProgressUpdate {
@@ -10,14 +9,12 @@ interface ProgressUpdate {
 
 export type ProgressRelay = (progress: ProgressUpdate) => Promise<void>;
 
-export function createProgressRelay(
-	extra: RequestHandlerExtra<ServerRequest, ServerNotification> | undefined
-): ProgressRelay | undefined {
+export function createProgressRelay(extra: ServerContext | undefined): ProgressRelay | undefined {
 	if (!extra) {
 		return undefined;
 	}
 
-	const progressToken = extra._meta?.progressToken;
+	const progressToken = extra.mcpReq._meta?.progressToken;
 	if (progressToken === undefined || (typeof progressToken !== 'number' && typeof progressToken !== 'string')) {
 		return undefined;
 	}
@@ -26,7 +23,7 @@ export function createProgressRelay(
 	let fallbackProgress = 0;
 
 	return async (progress): Promise<void> => {
-		if (disabled || extra.signal.aborted) {
+		if (disabled || extra.mcpReq.signal.aborted) {
 			disabled = true;
 			return;
 		}
@@ -39,7 +36,7 @@ export function createProgressRelay(
 			fallbackProgress = Math.max(fallbackProgress, progressValue);
 		}
 		try {
-			await extra.sendNotification({
+			await extra.mcpReq.notify({
 				method: 'notifications/progress',
 				params: {
 					progressToken,

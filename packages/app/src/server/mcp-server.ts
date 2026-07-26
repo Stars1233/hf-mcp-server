@@ -1,6 +1,5 @@
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import type { z } from 'zod';
+import { McpServer, type CallToolResult } from '@modelcontextprotocol/server';
+import { z } from 'zod';
 import { performance } from 'node:perf_hooks';
 import { whoAmI } from '@huggingface/hub';
 import {
@@ -236,7 +235,7 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 				{
 					title: 'Hugging Face User Info',
 					description: whoDescription,
-					inputSchema: {},
+					inputSchema: z.object({}),
 					annotations: { readOnlyHint: true, openWorldHint: false, title: 'Hugging Face User Info' },
 				},
 				() => {
@@ -251,7 +250,7 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 				{
 					title: REPO_SEARCH_TOOL_CONFIG.annotations.title,
 					description: REPO_SEARCH_TOOL_CONFIG.description,
-					inputSchema: REPO_SEARCH_TOOL_CONFIG.schema.shape,
+					inputSchema: REPO_SEARCH_TOOL_CONFIG.schema,
 					annotations: REPO_SEARCH_TOOL_CONFIG.annotations,
 				},
 				async (params: RepoSearchParams) => {
@@ -287,8 +286,8 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 				{
 					title: createRepoToolConfig.annotations.title,
 					description: createRepoToolConfig.description,
-					inputSchema: createRepoToolConfig.schema.shape,
-					outputSchema: createRepoToolConfig.outputSchema.shape,
+					inputSchema: createRepoToolConfig.schema,
+					outputSchema: createRepoToolConfig.outputSchema,
 					annotations: createRepoToolConfig.annotations,
 				},
 				async (params: CreateRepoParams) => {
@@ -335,7 +334,7 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 				HUB_REPO_DETAILS_TOOL_CONFIG.name,
 				{
 					description: hubInspectDescription,
-					inputSchema: hubInspectSchemaShape,
+					inputSchema: z.object(hubInspectSchemaShape),
 					annotations: HUB_REPO_DETAILS_TOOL_CONFIG.annotations,
 				},
 				async (params: Record<string, unknown>) => {
@@ -403,8 +402,8 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 				{
 					title: hfFsToolConfig.title,
 					description: hfFsToolConfig.description,
-					inputSchema: hfFsToolConfig.schema.shape,
-					outputSchema: hfFsToolConfig.outputSchema.shape,
+					inputSchema: hfFsToolConfig.schema,
+					outputSchema: hfFsToolConfig.outputSchema,
 					annotations: hfFsToolConfig.annotations,
 				},
 				async (request: HfFsRequest) => {
@@ -449,8 +448,8 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 					{
 						title: hfFsWriteToolConfig.title,
 						description: hfFsWriteToolConfig.description,
-						inputSchema: hfFsWriteToolConfig.schema.shape,
-						outputSchema: hfFsWriteToolConfig.outputSchema.shape,
+						inputSchema: hfFsWriteToolConfig.schema,
+						outputSchema: hfFsWriteToolConfig.outputSchema,
 						annotations: hfFsWriteToolConfig.annotations,
 					},
 					async (request: HfFsWriteRequest) => {
@@ -492,10 +491,10 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 				{
 					title: HF_JOBS_TOOL_CONFIG.annotations.title,
 					description: HF_JOBS_TOOL_CONFIG.description,
-					inputSchema: HF_JOBS_TOOL_CONFIG.schema.shape,
+					inputSchema: HF_JOBS_TOOL_CONFIG.schema,
 					annotations: HF_JOBS_TOOL_CONFIG.annotations,
 				},
-				async (params: z.infer<typeof HF_JOBS_TOOL_CONFIG.schema>, extra) => {
+				async (params: z.infer<typeof HF_JOBS_TOOL_CONFIG.schema>, ctx) => {
 					// Jobs require authentication - check if user has token
 					const isAuthenticated = !!hfToken;
 					const loggedOperation = params.operation ?? 'no-operation';
@@ -514,7 +513,7 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 						},
 						async () => {
 							const jobsTool = new HfJobsTool(hfToken, isAuthenticated, username);
-							return jobsTool.execute(params, { onProgress: createProgressRelay(extra) });
+							return jobsTool.execute(params, { onProgress: createProgressRelay(ctx) });
 						}
 					);
 
@@ -549,13 +548,13 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 				{
 					title: sandboxToolConfig.title,
 					description: sandboxToolConfig.description,
-					inputSchema: sandboxToolConfig.schema.shape,
-					outputSchema: sandboxToolConfig.outputSchema.shape,
+					inputSchema: sandboxToolConfig.schema,
+					outputSchema: sandboxToolConfig.outputSchema,
 					annotations: sandboxToolConfig.annotations,
 				},
-				async (params: HfSandboxParams, extra) => {
+				async (params: HfSandboxParams, ctx) => {
 					const isAuthenticated = !!hfToken;
-					const onProgress = createProgressRelay(extra);
+					const onProgress = createProgressRelay(ctx);
 					const result = await runWithQueryLogging(
 						logToolQuery,
 						{
@@ -590,13 +589,13 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 				{
 					title: sandboxExecToolConfig.title,
 					description: sandboxExecToolConfig.description,
-					inputSchema: sandboxExecToolConfig.schema.shape,
-					outputSchema: sandboxExecToolConfig.outputSchema.shape,
+					inputSchema: sandboxExecToolConfig.schema,
+					outputSchema: sandboxExecToolConfig.outputSchema,
 					annotations: sandboxExecToolConfig.annotations,
 				},
-				async (params: HfSandboxExecParams, extra) => {
+				async (params: HfSandboxExecParams, ctx) => {
 					const isAuthenticated = !!hfToken;
-					const onProgress = createProgressRelay(extra);
+					const onProgress = createProgressRelay(ctx);
 					const result = await runWithQueryLogging(
 						logToolQuery,
 						{
@@ -631,8 +630,8 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 				{
 					title: sandboxFsToolConfig.title,
 					description: sandboxFsToolConfig.description,
-					inputSchema: sandboxFsToolConfig.schema.shape,
-					outputSchema: sandboxFsToolConfig.outputSchema.shape,
+					inputSchema: sandboxFsToolConfig.schema,
+					outputSchema: sandboxFsToolConfig.outputSchema,
 					annotations: sandboxFsToolConfig.annotations,
 				},
 				async (params: HfSandboxFsParams) => {
@@ -672,10 +671,10 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 				{
 					title: dynamicSpaceToolConfig.annotations.title,
 					description: dynamicSpaceToolConfig.description,
-					inputSchema: dynamicSpaceToolConfig.schema.shape,
+					inputSchema: dynamicSpaceToolConfig.schema,
 					annotations: dynamicSpaceToolConfig.annotations,
 				},
-				async (params: SpaceArgs, extra) => {
+				async (params: SpaceArgs, ctx) => {
 					// Check if invoke operation is disabled by gradio=none
 					const { gradio } = extractAuthBouquetAndMix(headers);
 					if (params.operation === 'invoke' && gradio === 'none') {
@@ -697,7 +696,7 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 						try {
 							const spaceTool = new SpaceTool(hfToken);
 							const result = await spaceTool.execute(params, {
-								onProgress: createProgressRelay(extra),
+								onProgress: createProgressRelay(ctx),
 							});
 
 							if ('result' in result && result.result) {

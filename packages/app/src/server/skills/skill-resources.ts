@@ -1,9 +1,8 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { ErrorCode, McpError, type ServerResult } from '@modelcontextprotocol/sdk/types.js';
+import { ProtocolError, ProtocolErrorCode, type McpServer, type ServerResult } from '@modelcontextprotocol/server';
 import { logger } from '../utils/logger.js';
 import type { ReadableSkillFile, SkillCatalog } from './skill-types.js';
 import { listSkillResources, readSkillDirectory, readSkillFile, SKILL_INDEX_URI } from './skill-resource-data.js';
-import { ResourcesDirectoryReadRequestSchema } from './skill-directory-schema.js';
+import { RESOURCES_DIRECTORY_READ_METHOD, ResourcesDirectoryReadParamsSchema } from './skill-directory-schema.js';
 
 function registerReadable(server: McpServer, name: string, file: ReadableSkillFile, description?: string): void {
 	server.registerResource(
@@ -13,7 +12,7 @@ function registerReadable(server: McpServer, name: string, file: ReadableSkillFi
 		async () => {
 			const content = await readSkillFile(file);
 			return { contents: [content] };
-		},
+		}
 	);
 }
 
@@ -36,18 +35,21 @@ export function registerSkillResources(server: McpServer, catalog: SkillCatalog)
 		},
 		async () => ({
 			contents: [{ uri: SKILL_INDEX_URI, mimeType: 'application/json', text: catalog.indexText }],
-		}),
+		})
 	);
 
 	// SEP-2640 `resources/directory/read`: list the direct children of a directory resource.
-	server.server.setRequestHandler(ResourcesDirectoryReadRequestSchema, (request): ServerResult => {
-		const { uri, cursor } = request.params;
-		const listing = readSkillDirectory(catalog, uri, cursor);
-		if (!listing) {
-			throw new McpError(ErrorCode.InvalidParams, `Not a directory resource: ${uri}`);
+	server.server.setRequestHandler(
+		RESOURCES_DIRECTORY_READ_METHOD,
+		{ params: ResourcesDirectoryReadParamsSchema },
+		({ uri, cursor }): ServerResult => {
+			const listing = readSkillDirectory(catalog, uri, cursor);
+			if (!listing) {
+				throw new ProtocolError(ProtocolErrorCode.InvalidParams, `Not a directory resource: ${uri}`);
+			}
+			return listing as ServerResult;
 		}
-		return listing as ServerResult;
-	});
+	);
 
 	const resources = listSkillResources(catalog).length;
 	logger.info({ skills: catalog.entries.length, resources }, 'registered skill resources');

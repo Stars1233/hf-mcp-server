@@ -6,10 +6,7 @@ import { z } from 'zod';
 // `resources/list` shape (an array of Resource + optional `nextCursor`).
 export const RESOURCES_DIRECTORY_READ_METHOD = 'resources/directory/read';
 
-export const ResourcesDirectoryReadRequestSchema = z.looseObject({
-	method: z.literal(RESOURCES_DIRECTORY_READ_METHOD),
-	params: z.looseObject({
-		uri: z.string(),
-		cursor: z.string().optional(),
-	}),
+export const ResourcesDirectoryReadParamsSchema = z.looseObject({
+	uri: z.string(),
+	cursor: z.string().optional(),
 });
