@@ -69,7 +69,20 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 		skipGradio?: boolean,
 		sessionInfo?: ServerRequestContext
 	): Promise<ServerFactoryResult> => {
-		logger.debug({ skipGradio, sessionInfo }, '=== CREATING NEW MCP SERVER INSTANCE ===');
+		const debugRequestContext = sessionInfo
+			? {
+					clientSessionId: sessionInfo.clientSessionId,
+					requestId: sessionInfo.requestId,
+					protocolEra: sessionInfo.protocolEra,
+					protocolVersion: sessionInfo.protocolVersion,
+					clientCapabilities: sessionInfo.clientCapabilities,
+					userHash: sessionInfo.userHash,
+					isAuthenticated: sessionInfo.isAuthenticated,
+					clientInfo: sessionInfo.clientInfo,
+					hasAuthenticatedUser: sessionInfo.authenticatedUser !== undefined,
+				}
+			: undefined;
+		logger.debug({ skipGradio, requestContext: debugRequestContext }, '=== CREATING NEW MCP SERVER INSTANCE ===');
 		// Extract auth using shared utility
 		const { hfToken } = extractAuthBouquetAndMix(headers, { allowDefaultHfToken: headers === null });
 
@@ -111,7 +124,7 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 				clientName: sessionInfo?.clientInfo?.name,
 				clientVersion: sessionInfo?.clientInfo?.version,
 			};
-			logger.debug({ sessionInfo, options }, 'Query logging options:');
+			logger.debug({ requestContext: debugRequestContext, options }, 'Query logging options:');
 			return options;
 		};
 
