@@ -1,10 +1,38 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { StatelessHttpTransport } from '../../../src/server/transport/stateless-http-transport.js';
+import {
+	MAX_METRICS_RESPONSE_CAPTURE_BYTES,
+	MetricsResponseCapture,
+	StatelessHttpTransport,
+} from '../../../src/server/transport/stateless-http-transport.js';
 import type { ServerFactory } from '../../../src/server/transport/base-transport.js';
 import { formatMetricsForAPI } from '../../../src/shared/transport-metrics.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import express from 'express';
+
+describe('MetricsResponseCapture', () => {
+	it('detects JSON-RPC and tool errors in bounded responses', () => {
+		const rpcError = new MetricsResponseCapture();
+		rpcError.add('{"jsonrpc":"2.0","id":1,');
+		rpcError.add('"error":{"code":-32603,"message":"failed"}}');
+		expect(rpcError.isError()).toBe(true);
+
+		const toolError = new MetricsResponseCapture();
+		toolError.add(Buffer.from('{"jsonrpc":"2.0","id":1,"result":{"content":[],"isError":true}}'));
+		expect(toolError.isError()).toBe(true);
+	});
+
+	it('does not concatenate or parse responses larger than the capture limit', () => {
+		const capture = new MetricsResponseCapture();
+		capture.add(Buffer.alloc(MAX_METRICS_RESPONSE_CAPTURE_BYTES + 1, 'x'));
+		const concatSpy = vi.spyOn(Buffer, 'concat');
+
+		expect(capture.isError()).toBe(false);
+		expect(concatSpy).not.toHaveBeenCalled();
+
+		concatSpy.mockRestore();
+	});
+});
 
 describe('StatelessHttpTransport', () => {
 	let transport: StatelessHttpTransport;

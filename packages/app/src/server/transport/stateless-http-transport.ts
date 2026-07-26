@@ -34,6 +34,7 @@ const FULL_SERVER_METHODS = new Set(['tools/list', 'tools/call', 'initialize', .
 // notify `resources/updated` about). Rejected cheaply before any server is built.
 const UNSUPPORTED_SUBSCRIBE_METHODS = new Set(['resources/subscribe', 'resources/unsubscribe']);
 const UNSUPPORTED_PROMPT_METHODS = new Set(['prompts/list', 'prompts/get']);
+export const MAX_METRICS_RESPONSE_CAPTURE_BYTES = 64 * 1024;
 
 interface JsonRpcRequestBody {
 	method?: string;
@@ -55,6 +56,49 @@ function isErrorResponseBody(body: string): boolean {
 		return responses.some((response) => response.error !== undefined || response.result?.isError === true);
 	} catch {
 		return false;
+	}
+}
+
+export class MetricsResponseCapture {
+	private readonly chunks: Buffer[] = [];
+	private capturedBytes = 0;
+	private truncated = false;
+
+	add(chunk: unknown): void {
+		if (typeof chunk !== 'string' && !(chunk instanceof Uint8Array)) return;
+
+		const remainingBytes = MAX_METRICS_RESPONSE_CAPTURE_BYTES - this.capturedBytes;
+		if (remainingBytes <= 0) {
+			this.truncated = true;
+			return;
+		}
+
+		if (typeof chunk === 'string') {
+			const candidate = Buffer.from(chunk.slice(0, remainingBytes));
+			const captured = candidate.subarray(0, remainingBytes);
+			if (captured.length > 0) {
+				this.chunks.push(Buffer.from(captured));
+				this.capturedBytes += captured.length;
+			}
+			if (chunk.length > remainingBytes || candidate.length > remainingBytes) {
+				this.truncated = true;
+			}
+			return;
+		}
+
+		const captured = chunk.subarray(0, remainingBytes);
+		if (captured.length > 0) {
+			this.chunks.push(Buffer.from(captured));
+			this.capturedBytes += captured.length;
+		}
+		if (chunk.length > remainingBytes) {
+			this.truncated = true;
+		}
+	}
+
+	isError(): boolean {
+		if (this.truncated) return false;
+		return isErrorResponseBody(Buffer.concat(this.chunks, this.capturedBytes).toString('utf8'));
 	}
 }
 
@@ -508,20 +552,15 @@ export class StatelessHttpTransport extends BaseTransport {
 			// Connect and handle
 			await server.connect(transport);
 
-			const responseChunks: Buffer[] = [];
-			const captureResponseChunk = (chunk: unknown): void => {
-				if (typeof chunk === 'string' || chunk instanceof Uint8Array) {
-					responseChunks.push(Buffer.from(chunk));
-				}
-			};
+			const responseCapture = new MetricsResponseCapture();
 			const originalWrite = res.write;
 			const originalEnd = res.end;
 			res.write = ((chunk: unknown, ...args: unknown[]) => {
-				captureResponseChunk(chunk);
+				responseCapture.add(chunk);
 				return Reflect.apply(originalWrite, res, [chunk, ...args]) as boolean;
 			}) as typeof res.write;
 			res.end = ((chunk?: unknown, ...args: unknown[]) => {
-				captureResponseChunk(chunk);
+				responseCapture.add(chunk);
 				return Reflect.apply(originalEnd, res, [chunk, ...args]) as Response;
 			}) as typeof res.end;
 			try {
@@ -531,7 +570,7 @@ export class StatelessHttpTransport extends BaseTransport {
 				res.end = originalEnd;
 			}
 
-			const responseIsError = isErrorResponseBody(Buffer.concat(responseChunks).toString('utf8'));
+			const responseIsError = responseCapture.isError();
 			this.trackMethodCall(trackingName, startTime, responseIsError, clientInfo);
 
 			logger.debug(

@@ -1,0 +1,69 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
+
+const mocks = vi.hoisted(() => ({
+	connect: vi.fn(),
+	request: vi.fn(),
+	close: vi.fn(),
+}));
+
+vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
+	Client: class {
+		connect = mocks.connect;
+		request = mocks.request;
+		close = mocks.close;
+	},
+}));
+
+vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => ({
+	StreamableHTTPClientTransport: class {},
+}));
+
+vi.mock('../src/logger.js', () => ({
+	logger: {
+		trace: vi.fn(),
+	},
+}));
+
+vi.mock('../src/network/fetch-profile.js', () => ({
+	NETWORK_FETCH_PROFILES: {
+		gradioMcpHost: () => ({}),
+	},
+	fetchWithProfile: vi.fn(),
+}));
+
+vi.mock('../src/network/url-policy.js', () => ({
+	createGradioMcpPolicy: () => ({}),
+	parseAndValidateUrl: (url: string) => new URL(url),
+}));
+
+import { callGradioToolWithHeaders } from '../src/space/utils/gradio-caller.js';
+
+describe('callGradioToolWithHeaders progress handling', () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		delete process.env.GRADIO_SKIP_INITIALIZE;
+		mocks.request.mockResolvedValue({ content: [], isError: false });
+	});
+
+	it('requests upstream progress and resets the timeout when progress arrives', async () => {
+		await callGradioToolWithHeaders('https://example.hf.space/gradio_api/mcp/', 'predict', {}, undefined);
+
+		expect(mocks.request).toHaveBeenCalledWith(
+			{
+				method: 'tools/call',
+				params: {
+					name: 'predict',
+					arguments: {},
+					_meta: { progressToken: 'hf-mcp-server' },
+				},
+			},
+			CallToolResultSchema,
+			expect.objectContaining({
+				onprogress: expect.any(Function),
+				resetTimeoutOnProgress: true,
+			})
+		);
+		expect(mocks.close).toHaveBeenCalledOnce();
+	});
+});

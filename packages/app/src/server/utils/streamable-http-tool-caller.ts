@@ -2,6 +2,7 @@ import type { CallToolResult, ReadResourceResult } from '@modelcontextprotocol/s
 import { CallToolResultSchema, ReadResourceResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import type { RequestOptions } from '@modelcontextprotocol/sdk/shared/protocol.js';
 import { fetchWithProfile, NETWORK_FETCH_PROFILES, parseAndValidateUrl } from '@llmindset/hf-mcp/network';
 import { logger } from './logger.js';
 
@@ -65,15 +66,25 @@ export async function callStreamableHttpTool(
 	logger.trace({ serverUrl }, 'Streamable proxy connected upstream');
 
 	try {
+		const progressToken = 'hf-mcp-server';
+		const requestOptions: RequestOptions = {
+			onprogress: (progress) => {
+				logger.trace({ serverUrl, toolName, progress }, 'Streamable proxy upstream progress event');
+			},
+			resetTimeoutOnProgress: true,
+		};
+
 		const result = await client.request(
 			{
 				method: 'tools/call',
 				params: {
 					name: toolName,
 					arguments: parameters,
+					_meta: { progressToken },
 				},
 			},
-			CallToolResultSchema
+			CallToolResultSchema,
+			requestOptions
 		);
 
 		logger.trace(
