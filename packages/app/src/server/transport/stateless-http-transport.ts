@@ -1,6 +1,17 @@
-import { BaseTransport, type SessionMetadata, type ServerFactory } from './base-transport.js';
-import { McpServer, isJSONRPCNotification } from '@modelcontextprotocol/server';
-import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node';
+import {
+	BaseTransport,
+	type ServerRequestContext,
+	type SessionMetadata,
+	type ServerFactory,
+} from './base-transport.js';
+import {
+	createMcpHandler,
+	isJSONRPCNotification,
+	isLegacyRequest,
+	McpServer,
+	type McpHttpHandler,
+} from '@modelcontextprotocol/server';
+import { NodeStreamableHTTPServerTransport, toNodeHandler } from '@modelcontextprotocol/node';
 import { logger } from '../utils/logger.js';
 import type { Request, Response, Express } from 'express';
 import { JsonRpcErrors, extractJsonRpcId } from './json-rpc-errors.js';
@@ -10,6 +21,7 @@ import { extractQueryParamsToHeaders } from '../utils/query-params.js';
 import { isBrowser } from '../utils/browser-detection.js';
 import { buildOAuthResourceHeader } from '../utils/oauth-resource.js';
 import { randomUUID } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { logSystemEvent } from '../utils/query-logger.js';
 import { disabledToolCallName, disabledToolMessage } from '../utils/disabled-tools.js';
 import { isClientDenied } from '../../shared/client-denylist.js';
@@ -17,6 +29,7 @@ import { getSkillCatalog } from '../skills/skill-catalog-cache.js';
 import { listSkillResources, readSkillResource, readSkillDirectory } from '../skills/skill-resource-data.js';
 import { RESOURCES_DIRECTORY_READ_METHOD } from '../skills/skill-directory-schema.js';
 import { getProxyToolsConfig } from '../utils/proxy-tools-config.js';
+import { BOUQUET_FALLBACK } from '../../shared/settings.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -44,7 +57,19 @@ interface JsonRpcRequestBody {
 		clientInfo?: unknown;
 		capabilities?: unknown;
 		name?: string;
+		_meta?: Record<string, unknown>;
 	};
+}
+
+interface ModernRequestData {
+	headers: Record<string, string>;
+	clientInfo?: { name: string; version: string };
+	requestId: string;
+	isAuthenticated: boolean;
+	authenticatedUser?: ServerRequestContext['authenticatedUser'];
+	useFullServer: boolean;
+	skipGradio: boolean;
+	discoveryOnly: boolean;
 }
 
 function isErrorResponseBody(body: string): boolean {
@@ -125,6 +150,9 @@ export class StatelessHttpTransport extends BaseTransport {
 	private readonly tempLogMax: number;
 	private tempLogCounter: number = 0;
 	private tempLogOriginalCount: number = 0;
+	private readonly modernRequestStorage = new AsyncLocalStorage<ModernRequestData>();
+	private modernHandler?: McpHttpHandler;
+	private modernNodeHandler?: ReturnType<typeof toNodeHandler>;
 
 	constructor(serverFactory: ServerFactory, app: Express) {
 		super(serverFactory, app);
@@ -264,10 +292,87 @@ export class StatelessHttpTransport extends BaseTransport {
 		return false;
 	}
 
+	private extractModernClientInfo(
+		requestBody: JsonRpcRequestBody | undefined
+	): { name: string; version: string } | undefined {
+		const clientInfo = requestBody?.params?._meta?.['io.modelcontextprotocol/clientInfo'];
+		if (typeof clientInfo !== 'object' || clientInfo === null) return undefined;
+
+		const { name, version } = clientInfo as { name?: unknown; version?: unknown };
+		return typeof name === 'string' && typeof version === 'string' ? { name, version } : undefined;
+	}
+
+	private toWebRequest(req: Request): globalThis.Request {
+		const headers = new Headers();
+		for (const [name, value] of Object.entries(req.headers)) {
+			if (Array.isArray(value)) {
+				for (const item of value) headers.append(name, item);
+			} else if (value !== undefined) {
+				headers.set(name, value);
+			}
+		}
+
+		const host = req.get('host') || 'localhost';
+		return new globalThis.Request(`${req.protocol}://${host}${req.originalUrl}`, {
+			method: req.method,
+			headers,
+			body: JSON.stringify(req.body),
+		});
+	}
+
+	private setupModernHandler(): void {
+		this.modernHandler = createMcpHandler(
+			async () => {
+				const requestData = this.modernRequestStorage.getStore();
+				if (!requestData) {
+					throw new Error('Modern MCP server factory called outside a request context');
+				}
+
+				if (!requestData.useFullServer) {
+					return new McpServer({ name: '@huggingface/internal-responder', version: '0.0.1' });
+				}
+
+				const result = await this.serverFactory(
+					requestData.headers,
+					requestData.discoveryOnly ? BOUQUET_FALLBACK : undefined,
+					requestData.skipGradio,
+					{
+						requestId: requestData.requestId,
+						isAuthenticated: requestData.isAuthenticated,
+						clientInfo: requestData.clientInfo,
+						authenticatedUser: requestData.authenticatedUser,
+						protocolEra: 'modern',
+					}
+				);
+				result.server.server.onerror = (error) => {
+					this.trackError(undefined, error);
+					logger.error({ error }, 'Modern HTTP MCP server error');
+				};
+				return result.server;
+			},
+			{
+				legacy: 'reject',
+				responseMode: 'auto',
+				onerror: (error) => {
+					logger.error({ error }, 'Modern HTTP MCP handler error');
+				},
+			}
+		);
+		this.modernNodeHandler = toNodeHandler(this.modernHandler);
+	}
+
 	override initialize(): Promise<void> {
+		this.setupModernHandler();
+
 		this.app.post('/mcp', async (req: Request, res: Response) => {
 			this.trackRequest();
-			await this.handleJsonRpcRequest(req, res);
+			const legacy = await isLegacyRequest(this.toWebRequest(req));
+			this.metrics.trackProtocolEra(legacy ? 'legacy' : 'modern');
+			if (legacy) {
+				await this.handleJsonRpcRequest(req, res);
+			} else {
+				await this.handleModernRequest(req, res);
+			}
 		});
 
 		// Serve the MCP welcome page on GET requests (or 405 if strict compliance is enabled)
@@ -310,6 +415,116 @@ export class StatelessHttpTransport extends BaseTransport {
 
 		logger.info('HTTP JSON transport initialized (stateless mode)');
 		return Promise.resolve();
+	}
+
+	private async handleModernRequest(req: Request, res: Response): Promise<void> {
+		const startTime = Date.now();
+		const requestId = randomUUID();
+		const headers = req.headers as Record<string, string>;
+		extractQueryParamsToHeaders(req, headers);
+
+		const requestBody = req.body as JsonRpcRequestBody | undefined;
+		const trackingName = this.extractMethodForTracking(requestBody);
+		const clientInfo = this.extractModernClientInfo(requestBody);
+		const ipAddress = this.extractIpAddress(req.headers, req.ip);
+
+		this.trackIpAddress(ipAddress);
+
+		const authResult = await this.validateAuthAndTrackMetrics(headers);
+		if (!authResult.shouldContinue) {
+			res.set('WWW-Authenticate', buildOAuthResourceHeader(req));
+			res.status(authResult.statusCode || 401).send('Unauthorized');
+			return;
+		}
+
+		this.trackNewConnection();
+		if (clientInfo) {
+			// Modern HTTP is request-scoped. Mark the identity connected only
+			// while this exchange is active instead of manufacturing a session.
+			this.associateSessionWithClient(clientInfo);
+			this.updateClientActivity(clientInfo);
+			this.trackClientIpAddress(ipAddress, clientInfo);
+			this.trackClientAuth(headers['authorization']?.replace(/^Bearer\s+/i, ''), clientInfo);
+		}
+
+		if (requestBody?.method === 'server/discover') {
+			logSystemEvent('server_discover', requestId, {
+				requestId,
+				protocolEra: 'modern',
+				isAuthenticated: authResult.userIdentified,
+				clientName: clientInfo?.name,
+				clientVersion: clientInfo?.version,
+				requestJson: requestBody.params || {},
+				capabilities: requestBody.params?._meta?.['io.modelcontextprotocol/clientCapabilities'],
+				ipAddress,
+			});
+		}
+
+		const useFullServer =
+			requestBody?.method === 'server/discover' ||
+			this.shouldHandle(requestBody, clientInfo?.name, headers['user-agent']);
+		const skipGradio = requestBody?.method === 'server/discover' || this.skipGradioSetup(requestBody);
+		const requestData: ModernRequestData = {
+			headers,
+			clientInfo,
+			requestId,
+			isAuthenticated: authResult.userIdentified,
+			authenticatedUser: authResult.authenticatedUser,
+			useFullServer,
+			skipGradio,
+			discoveryOnly: requestBody?.method === 'server/discover',
+		};
+
+		const responseCapture = new MetricsResponseCapture();
+		const originalWrite = res.write;
+		const originalEnd = res.end;
+		res.write = ((chunk: unknown, ...args: unknown[]) => {
+			responseCapture.add(chunk);
+			return Reflect.apply(originalWrite, res, [chunk, ...args]) as boolean;
+		}) as typeof res.write;
+		res.end = ((chunk?: unknown, ...args: unknown[]) => {
+			responseCapture.add(chunk);
+			return Reflect.apply(originalEnd, res, [chunk, ...args]) as Response;
+		}) as typeof res.end;
+
+		try {
+			if (!this.modernNodeHandler) {
+				throw new Error('Modern MCP handler is not initialized');
+			}
+			await this.modernRequestStorage.run(requestData, async () => {
+				await this.modernNodeHandler?.(req, res, req.body);
+			});
+
+			const responseIsError = res.statusCode >= 400 || responseCapture.isError();
+			this.trackMethodCall(trackingName, startTime, responseIsError, clientInfo);
+			if (res.statusCode >= 400) {
+				this.trackError(res.statusCode);
+			}
+
+			logger.debug(
+				{
+					duration: Date.now() - startTime,
+					method: trackingName,
+					protocolEra: 'modern',
+					requestId,
+					handledBy: useFullServer ? 'full' : 'stub',
+				},
+				'Modern MCP request completed'
+			);
+		} catch (error) {
+			this.trackMethodCall(trackingName, startTime, true, clientInfo);
+			this.trackError(500, error instanceof Error ? error : new Error(String(error)));
+			logger.error({ error, method: trackingName, requestId }, 'Error handling modern MCP request');
+			if (!res.headersSent) {
+				res.status(500).json(JsonRpcErrors.internalError(extractJsonRpcId(req.body)));
+			}
+		} finally {
+			res.write = originalWrite;
+			res.end = originalEnd;
+			if (clientInfo) {
+				this.metrics.disconnectClient(clientInfo);
+			}
+		}
 	}
 
 	private async handleJsonRpcRequest(req: Request, res: Response): Promise<void> {
@@ -522,6 +737,7 @@ export class StatelessHttpTransport extends BaseTransport {
 				// Pass session info to server factory for query logging
 				const sessionInfoForLogging = {
 					clientSessionId: sessionId,
+					protocolEra: 'legacy' as const,
 					isAuthenticated: analyticsSession?.isAuthenticated ?? isAuthenticated,
 					clientInfo,
 					authenticatedUser: authResult.authenticatedUser,
@@ -693,6 +909,11 @@ export class StatelessHttpTransport extends BaseTransport {
 	 * Clean up resources
 	 */
 	override async cleanup(): Promise<void> {
+		await this.modernHandler?.close().catch((error: unknown) => {
+			logger.warn({ error }, 'Error closing modern HTTP MCP handler');
+		});
+		this.modernHandler = undefined;
+		this.modernNodeHandler = undefined;
 		for (const session of this.analyticsSessions.values()) {
 			this.metrics.disconnectClient(session.clientInfo);
 		}

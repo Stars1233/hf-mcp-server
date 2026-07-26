@@ -10,6 +10,16 @@ describe('isInitializeRequest', () => {
 });
 
 describe('MetricsCounter', () => {
+	it('tracks legacy and modern protocol requests independently', () => {
+		const metrics = new MetricsCounter();
+
+		metrics.trackProtocolEra('legacy');
+		metrics.trackProtocolEra('modern');
+		metrics.trackProtocolEra('modern');
+
+		expect(metrics.getMetrics().protocolEras).toEqual({ legacy: 1, modern: 2 });
+	});
+
 	it('buckets method details after too many distinct values for a base method', () => {
 		const metrics = new MetricsCounter();
 

@@ -340,11 +340,13 @@ function createToolHandler(
 	hfToken?: string,
 	sessionInfo?: {
 		clientSessionId?: string;
+		requestId?: string;
 		isAuthenticated?: boolean;
 		clientInfo?: { name: string; version: string };
 	},
 	options: RegisterRemoteToolsOptions = {}
 ): (params: Record<string, unknown>, extra: ServerContext) => Promise<CallToolResult> {
+	const clientCorrelationId = sessionInfo?.clientSessionId ?? sessionInfo?.requestId;
 	return async (params: Record<string, unknown>, extra) => {
 		logger.info({ tool: tool.name, params }, 'Calling remote tool');
 
@@ -448,7 +450,7 @@ function createToolHandler(
 		} finally {
 			// Always log the Gradio event, even if there was a crash
 			const endTime = Date.now();
-			logGradioEvent(connection.name || connection.endpointId, sessionInfo?.clientSessionId || 'unknown', {
+			logGradioEvent(connection.name || connection.endpointId, clientCorrelationId || 'unknown', {
 				durationMs: endTime - startTime,
 				isAuthenticated: !!hfToken,
 				clientName: sessionInfo?.clientInfo?.name,

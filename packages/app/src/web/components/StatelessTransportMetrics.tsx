@@ -174,9 +174,7 @@ export function StatelessTransportMetrics({ metrics }: StatelessTransportMetrics
 						<p className="text-sm font-medium text-muted-foreground">Transport Type</p>
 						<div className="flex items-center gap-2">
 							<p className="text-sm font-mono">Stateless HTTP JSON</p>
-							<Badge variant="secondary">
-								{metrics.sessionLifecycle ? 'analytics' : 'stateless'}
-							</Badge>
+							<Badge variant="secondary">{metrics.sessionLifecycle ? 'analytics' : 'stateless'}</Badge>
 						</div>
 					</div>
 					<div>
@@ -206,6 +204,14 @@ export function StatelessTransportMetrics({ metrics }: StatelessTransportMetrics
 								<TableCell className="text-sm font-mono">
 									{metrics.errors.expected}/{metrics.errors.unexpected}
 								</TableCell>
+							</TableRow>
+							<TableRow>
+								<TableCell className="font-medium text-sm">Protocol Requests (Legacy/Modern)</TableCell>
+								<TableCell className="text-sm font-mono">
+									{metrics.protocolEras.legacy}/{metrics.protocolEras.modern}
+								</TableCell>
+								<TableCell className="font-medium text-sm">Modern HTTP Sessions</TableCell>
+								<TableCell className="text-sm font-mono">request-scoped</TableCell>
 							</TableRow>
 							{(metrics.staticPageHits200 !== undefined || metrics.staticPageHits405 !== undefined) && (
 								<TableRow>
@@ -248,18 +254,16 @@ export function StatelessTransportMetrics({ metrics }: StatelessTransportMetrics
 							<TableRow>
 								<TableCell className="font-medium text-sm">Gradio Success/Fail</TableCell>
 								<TableCell className="text-sm font-mono">
-									{metrics.gradioMetrics ? 
-										`${metrics.gradioMetrics.success}/${metrics.gradioMetrics.failure}` : 
-										'0/0'
-									}
+									{metrics.gradioMetrics ? `${metrics.gradioMetrics.success}/${metrics.gradioMetrics.failure}` : '0/0'}
 								</TableCell>
-								
+
 								{/* Session lifecycle metrics (analytics mode) - adjacent cells when present */}
 								{metrics.sessionLifecycle ? (
 									<>
 										<TableCell className="font-medium text-sm">Sessions New/Res-fail/Del</TableCell>
 										<TableCell className="text-sm font-mono">
-											{metrics.sessionLifecycle.created}/{metrics.sessionLifecycle.resumedFailed}/{metrics.sessionLifecycle.deleted}
+											{metrics.sessionLifecycle.created}/{metrics.sessionLifecycle.resumedFailed}/
+											{metrics.sessionLifecycle.deleted}
 										</TableCell>
 									</>
 								) : (

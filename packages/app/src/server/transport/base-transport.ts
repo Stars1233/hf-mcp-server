@@ -21,6 +21,8 @@ export interface ServerFactoryResult {
 
 export interface ServerRequestContext {
 	clientSessionId?: string;
+	requestId?: string;
+	protocolEra?: 'legacy' | 'modern';
 	isAuthenticated?: boolean;
 	clientInfo?: { name: string; version: string };
 	authenticatedUser?: WhoAmI;

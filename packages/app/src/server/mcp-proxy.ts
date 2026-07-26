@@ -251,7 +251,9 @@ export const createProxyServerFactory = (
 
 		// Register Streamable HTTP MCP tools regardless of Gradio skipping
 		registerProxyToolsFromConfig(server, proxyTools, hfToken, enabledToolIds, {
-			clientSessionId: sessionInfo?.clientSessionId,
+			clientSessionId: sessionInfo?.clientSessionId ?? sessionInfo?.requestId,
+			requestId: sessionInfo?.requestId,
+			protocolEra: sessionInfo?.protocolEra,
 			isAuthenticated: sessionInfo?.isAuthenticated ?? Boolean(hfToken),
 			clientName: sessionInfo?.clientInfo?.name,
 			clientVersion: sessionInfo?.clientInfo?.version,

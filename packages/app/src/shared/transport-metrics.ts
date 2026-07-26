@@ -7,6 +7,12 @@ import type { TransportType } from './constants.js';
 export interface TransportMetrics {
 	startupTime: Date;
 
+	// Requests split by protocol behavior era.
+	protocolEras: {
+		legacy: number;
+		modern: number;
+	};
+
 	// Connection metrics
 	connections: {
 		active: number | 'stateless';
@@ -162,6 +168,10 @@ export interface TransportMetricsResponse {
 	startupTime: string; // ISO date string
 	currentTime: string; // ISO date string
 	uptimeSeconds: number;
+	protocolEras: {
+		legacy: number;
+		modern: number;
+	};
 
 	connections: {
 		active: number | 'stateless';
@@ -257,6 +267,7 @@ export function formatMetricsForAPI(
 		startupTime: metrics.startupTime.toISOString(),
 		currentTime: currentTime.toISOString(),
 		uptimeSeconds,
+		protocolEras: metrics.protocolEras,
 		connections: metrics.connections,
 		sessionLifecycle: metrics.sessions,
 		requests: metrics.requests,
@@ -303,6 +314,10 @@ export function isInitializeRequest(method: string): boolean {
 function createEmptyMetrics(): TransportMetrics {
 	return {
 		startupTime: new Date(),
+		protocolEras: {
+			legacy: 0,
+			modern: 0,
+		},
 		connections: {
 			active: 0,
 			total: 0,
@@ -462,6 +477,13 @@ export class MetricsCounter {
 		// Calculate per-minute rates for the longer windows
 		this.metrics.requests.lastHour = Math.round((hourCount / 60) * 100) / 100; // Requests per minute over last hour
 		this.metrics.requests.last3Hours = Math.round((threeHourCount / 180) * 100) / 100; // Requests per minute over last 3 hours
+	}
+
+	/**
+	 * Track the protocol era selected for an MCP request.
+	 */
+	trackProtocolEra(era: 'legacy' | 'modern'): void {
+		this.metrics.protocolEras[era]++;
 	}
 
 	/**

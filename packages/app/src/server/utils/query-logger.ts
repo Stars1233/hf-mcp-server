@@ -20,6 +20,8 @@ interface QueryLogEntry {
 	serverVersion: string;
 	serverBuildSha: string;
 	clientSessionId?: string | null; // Client to MCP Server connection
+	requestId?: string | null; // Request correlation for request-scoped modern HTTP
+	protocolEra?: 'legacy' | 'modern' | null;
 	name?: string | null; // ClientInfo.name
 	version?: string | null; // ClientInfo.version
 	methodName: string;
@@ -39,6 +41,8 @@ interface QueryLogEntry {
 
 export interface QueryLoggerOptions {
 	clientSessionId?: string;
+	requestId?: string;
+	protocolEra?: 'legacy' | 'modern';
 	isAuthenticated?: boolean;
 	clientName?: string;
 	clientVersion?: string;
@@ -227,6 +231,8 @@ function logQueryEvent(
 		serverVersion: SERVER_VERSION,
 		serverBuildSha: SERVER_BUILD_SHA,
 		clientSessionId: options?.clientSessionId || null,
+		requestId: options?.requestId || null,
+		protocolEra: options?.protocolEra || null,
 		isAuthenticated: options?.isAuthenticated ?? false,
 		name: options?.clientName || null,
 		version: options?.clientVersion || null,
@@ -259,6 +265,8 @@ export function logSystemEvent(
 	sessionId: string,
 	options?: {
 		clientSessionId?: string;
+		requestId?: string;
+		protocolEra?: 'legacy' | 'modern';
 		isAuthenticated?: boolean;
 		clientName?: string;
 		clientVersion?: string;
@@ -304,6 +312,8 @@ export function logSystemEvent(
 			// Full request data for context
 			capabilities: options?.capabilities ? JSON.stringify(options.capabilities) : null,
 			clientSessionId: options?.clientSessionId || null,
+			requestId: options?.requestId || null,
+			protocolEra: options?.protocolEra || null,
 			requestJson: options?.requestJson
 				? JSON.stringify(options.requestJson)
 				: JSON.stringify({ methodName, sessionId }),

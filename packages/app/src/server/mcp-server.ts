@@ -98,9 +98,14 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 		}
 
 		// Helper function to build logging options
+		const clientCorrelationId = sessionInfo?.clientSessionId ?? sessionInfo?.requestId;
 		const getLoggingOptions = () => {
 			const options = {
-				clientSessionId: sessionInfo?.clientSessionId,
+				// Query log storage predates request-scoped modern HTTP. Keep the
+				// existing correlation column populated until its schema is versioned.
+				clientSessionId: clientCorrelationId,
+				requestId: sessionInfo?.requestId,
+				protocolEra: sessionInfo?.protocolEra,
 				isAuthenticated: sessionInfo?.isAuthenticated ?? !!hfToken,
 				clientName: sessionInfo?.clientInfo?.name,
 				clientVersion: sessionInfo?.clientInfo?.version,
@@ -732,7 +737,7 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 
 								const durationMs = Date.now() - startTime;
 								const responseContent = [...warningsContent, ...(processedResult.content as unknown[])];
-								logGradioEvent(params.space_name || 'unknown-space', sessionInfo?.clientSessionId || 'unknown', {
+								logGradioEvent(params.space_name || 'unknown-space', clientCorrelationId || 'unknown', {
 									durationMs,
 									isAuthenticated: !!hfToken,
 									clientName: sessionInfo?.clientInfo?.name,
@@ -768,7 +773,7 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 							};
 						} catch (err) {
 							const durationMs = Date.now() - startTime;
-							logGradioEvent(params.space_name || 'unknown-space', sessionInfo?.clientSessionId || 'unknown', {
+							logGradioEvent(params.space_name || 'unknown-space', clientCorrelationId || 'unknown', {
 								durationMs,
 								isAuthenticated: !!hfToken,
 								clientName: sessionInfo?.clientInfo?.name,

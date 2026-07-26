@@ -7,6 +7,7 @@ import {
 } from '../../../src/server/transport/stateless-http-transport.js';
 import type { ServerFactory } from '../../../src/server/transport/base-transport.js';
 import { McpServer } from '@modelcontextprotocol/server';
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { formatMetricsForAPI } from '../../../src/shared/transport-metrics.js';
 import express from 'express';
 import { createProgressRelay } from '../../../src/server/utils/progress-relay.js';
@@ -261,6 +262,102 @@ describe('StatelessHttpTransport', () => {
 	});
 
 	describe('production request path', () => {
+		it('serves modern clients request-scoped with discovery, identity metrics, and streamed progress', async () => {
+			process.env.ANALYTICS_MODE = 'true';
+			const app = express();
+			app.use(express.json());
+			const factoryCalls: Array<{
+				headers: Record<string, string> | null;
+				settings: Parameters<ServerFactory>[1];
+				skipGradio: Parameters<ServerFactory>[2];
+				sessionInfo: Parameters<ServerFactory>[3];
+			}> = [];
+			const serverFactory: ServerFactory = vi.fn(async (headers, settings, skipGradio, sessionInfo) => {
+				factoryCalls.push({ headers, settings, skipGradio, sessionInfo });
+				const server = new McpServer({ name: 'modern-test', version: '1.0.0' });
+				server.registerTool(
+					'progress_test',
+					{
+						description: 'Emits progress for modern transport testing.',
+						inputSchema: z.object({}),
+					},
+					async (_params, ctx) => {
+						await createProgressRelay(ctx)?.({ progress: 1, total: 2, message: 'Modern halfway' });
+						return { content: [{ type: 'text', text: 'modern done' }] };
+					}
+				);
+				return { server, enabledToolIds: [] };
+			});
+			transport = new StatelessHttpTransport(serverFactory, app);
+			await transport.initialize();
+
+			const httpServer = app.listen(0);
+			try {
+				await new Promise<void>((resolve, reject) => {
+					httpServer.once('listening', resolve);
+					httpServer.once('error', reject);
+				});
+				const address = httpServer.address();
+				if (!address || typeof address === 'string') {
+					throw new Error('Expected the test server to listen on a TCP port');
+				}
+
+				const client = new Client(
+					{ name: 'modern-contract-test', version: '1.0.0' },
+					{ versionNegotiation: { mode: { pin: '2026-07-28' } } }
+				);
+				const clientTransport = new StreamableHTTPClientTransport(
+					new URL(`http://127.0.0.1:${address.port}/mcp?bouquet=search`)
+				);
+				await client.connect(clientTransport);
+				expect(client.getProtocolEra()).toBe('modern');
+
+				const progress: Array<{ progress: number; total?: number; message?: string }> = [];
+				const result = await client.callTool(
+					{ name: 'progress_test', arguments: {} },
+					{
+						onprogress: (update) => {
+							progress.push(update);
+						},
+					}
+				);
+				await client.close();
+
+				expect(result.content).toEqual([{ type: 'text', text: 'modern done' }]);
+				expect(progress).toEqual([expect.objectContaining({ progress: 1, total: 2, message: 'Modern halfway' })]);
+				expect(factoryCalls.length).toBeGreaterThanOrEqual(2);
+				expect(factoryCalls.every(({ headers }) => headers?.['x-mcp-bouquet'] === 'search')).toBe(true);
+				expect(factoryCalls[0]).toMatchObject({
+					settings: { builtInTools: expect.any(Array), spaceTools: [] },
+					skipGradio: true,
+				});
+				expect(factoryCalls.at(-1)?.sessionInfo).toMatchObject({
+					protocolEra: 'modern',
+					isAuthenticated: false,
+					clientInfo: { name: 'modern-contract-test', version: '1.0.0' },
+					requestId: expect.any(String),
+				});
+
+				const metrics = transport.getMetrics();
+				expect(metrics.protocolEras.modern).toBeGreaterThanOrEqual(2);
+				expect(metrics.protocolEras.legacy).toBe(0);
+				expect(metrics.methods.get('server/discover')).toMatchObject({ count: 1, errors: 0 });
+				expect(metrics.methods.get('tools/call:progress_test')).toMatchObject({ count: 1, errors: 0 });
+				expect(Array.from(metrics.clients.values())).toContainEqual(
+					expect.objectContaining({
+						name: 'modern-contract-test',
+						version: '1.0.0',
+						isConnected: false,
+						activeConnections: 0,
+					})
+				);
+				expect(transport.getSessions()).toEqual([]);
+			} finally {
+				httpServer.close();
+				await transport.cleanup();
+			}
+		});
+
 		it('preserves bouquet and mix query parameters and exposes initialize dashboard metrics', async () => {
 			process.env.ANALYTICS_MODE = 'true';
 			const app = express();
@@ -323,6 +420,7 @@ describe('StatelessHttpTransport', () => {
 				});
 
 				const metrics = transport.getMetrics();
+				expect(metrics.protocolEras).toEqual({ legacy: 1, modern: 0 });
 				expect(metrics.methods.get('initialize')).toMatchObject({ count: 1, errors: 0 });
 				expect(metrics.sessions.created).toBe(1);
 				expect(metrics.connections.active).toBe(1);
