@@ -212,36 +212,23 @@ Run STDIO MCP Server:
 docker run -i --rm -e TRANSPORT=stdio -p 3000:3000 -e DEFAULT_HF_TOKEN=hf_xxx hf-mcp-server
 ```
 
-`TRANSPORT` can be `stdio`, `streamableHttp` or `streamableHttpJson` (default).
+`TRANSPORT` can be `stdio` or `streamableHttpJson` (default).
 
 ### Transport Endpoints
 
 The different transport types use the following endpoints:
-- Streamable HTTP: `/mcp` (regular or JSON mode)
+- Stateless Streamable HTTP JSON: `/mcp`
 - STDIO: Uses stdin/stdout directly, no HTTP endpoint
-
-### Stateful Connection Management
-
-The `streamableHttp` transport is _stateful_ - it maintains a connection with the MCP Client through an SSE connection. When using this transport, the following configuration options take effect:
-
-| Environment Variable              | Default | Description |
-|-----------------------------------|---------|-------------|
-| `MCP_CLIENT_HEARTBEAT_INTERVAL`   | 30000ms | How often to check connection health |
-| `MCP_CLIENT_CONNECTION_CHECK`     | 90000ms | How often to check for stale sessions |
-| `MCP_CLIENT_CONNECTION_TIMEOUT`   | 300000ms | Remove sessions inactive for this duration |
-| `MCP_PING_ENABLED`                | true    | Enable ping keep-alive for sessions |
-| `MCP_PING_INTERVAL`               | 30000ms | Interval between ping cycles | 
-
 
 ### Environment Variables
 
 The server respects the following environment variables:
-- `TRANSPORT`: The transport type to use (stdio, streamableHttp, or streamableHttpJson)
+- `TRANSPORT`: The transport type to use (`stdio` or `streamableHttpJson`)
 - `DEFAULT_HF_TOKEN`: Default token for local STDIO deployments. HTTP transports do not use this as a fallback for requests without an `Authorization: Bearer` header.
 - If running with `stdio` transport, `HF_TOKEN` is used if `DEFAULT_HF_TOKEN` is not set.
 - `MCP_ALLOWED_HOSTS`: Additional comma-separated Host allowlist for MCP and API routes. Loopback hosts `localhost,127.0.0.1,::1` are always allowed. Use exact hostnames or leading wildcard entries such as `*.example.com`.
 - `HF_API_TIMEOUT`: Timeout for Hugging Face API requests in milliseconds (default: 12500ms / 12.5 seconds)
-- `USER_CONFIG_API`: URL to use for User settings (defaults to Local front-end)
+- `USER_CONFIG_API`: Optional URL for per-user Hugging Face MCP settings. When unset, immutable built-in defaults are used.
 - `ALLOW_INTERNAL_ADDRESS_HOSTS`: Optional comma-separated host allowlist to permit internal/reserved DNS resolutions for trusted domains during outbound checks (supports exact hosts and `*.` wildcards, for example: `huggingface.co,*.hf.space`).
 - `MCP_STRICT_COMPLIANCE`: set to True for GET 405 rejects in JSON Mode (default serves a welcome page).
 - `DISABLE_TOOLS`: Optional comma-separated tool names to hide from `tools/list` and reject if called, for example `hub_repo_search,hf_fs`. Rejected calls remain visible as errors in the MCP dashboard tool-call statistics.

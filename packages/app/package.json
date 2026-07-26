@@ -7,7 +7,7 @@
 	"bin": {
 		"hf-mcp-server": "./dist/server/stdio.js",
 		"hf-mcp-server-http": "./dist/server/streamableHttp.js",
-		"hf-mcp-server-http-json": "./dist/server/streamableHttpJson.js"
+		"hf-mcp-server-http-json": "./dist/server/streamableHttp.js"
 	},
 	"files": [
 		"dist/**/*",
@@ -41,10 +41,8 @@
 		"dev:vite": "vite dev",
 		"dev:widget": "vite dev",
 		"dev:stdio": "pnpm run build:server && cross-env NODE_ENV=development node dist/server/stdio.js",
-		"dev:json": "pnpm run build:server && cross-env NODE_ENV=development node dist/server/streamableHttp.js --json",
-		"dev:watch": "concurrently \"tsc -p tsconfig.server.json --watch\" \"vite build --watch\" \"nodemon dist/server/streamableHttp.js --json\"",
+		"dev:watch": "concurrently \"tsc -p tsconfig.server.json --watch\" \"vite build --watch\" \"nodemon dist/server/streamableHttp.js\"",
 		"start": "cross-env NODE_ENV=production node dist/server/streamableHttp.js",
-		"start:json": "cross-env NODE_ENV=production node dist/server/streamableHttp.js --json",
 		"start:stdio": "cross-env NODE_ENV=production node dist/server/stdio.js",
 		"test": "vitest run",
 		"lint": "eslint . --fix",

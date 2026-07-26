@@ -43,7 +43,6 @@ export class Application {
 			port: this.webAppPort,
 			defaultHfTokenSet: !!defaultHfToken,
 			hfTokenMasked: defaultHfToken ? maskToken(defaultHfToken) : undefined,
-			jsonResponseEnabled: this.transportType === 'streamableHttpJson',
 			externalApiMode: !!process.env.USER_CONFIG_API,
 			stdioClient: this.transportType === 'stdio' ? null : undefined,
 		};

@@ -13,7 +13,6 @@ export function ConnectionFooter({ isLoading, error, transportInfo }: Connection
 		switch (transportInfo.transport) {
 			case 'stdio':
 				return 'STDIO';
-			case 'streamableHttp':
 			case 'streamableHttpJson':
 				return 'Streamable HTTP';
 			default:
@@ -24,7 +23,6 @@ export function ConnectionFooter({ isLoading, error, transportInfo }: Connection
 	// Get the endpoint path for the transport
 	const getEndpointPath = () => {
 		switch (transportInfo.transport) {
-			case 'streamableHttp':
 			case 'streamableHttpJson':
 				return '/mcp';
 			case 'stdio':
@@ -35,27 +33,13 @@ export function ConnectionFooter({ isLoading, error, transportInfo }: Connection
 	};
 
 	// Check if using JSON mode
-	const isJsonMode = () => {
-		return (
-			transportInfo.transport === 'streamableHttpJson' ||
-			(transportInfo.transport === 'streamableHttp' && transportInfo.jsonResponseEnabled === true)
-		);
-	};
-
 	// Get mode badge based on transport type
 	const getModeBadge = () => {
-		if (isJsonMode()) {
+		if (transportInfo.transport === 'streamableHttpJson') {
 			// For JSON mode - green badge with "JSON (stateless)"
 			return (
 				<span className="ml-1.5 px-1.5 py-0.5 bg-green-100 text-green-800 text-[10px] rounded-sm whitespace-nowrap">
 					JSON (stateless)
-				</span>
-			);
-		} else if (transportInfo.transport === 'streamableHttp') {
-			// For non-JSON StreamableHttp - blue badge with "Session Based"
-			return (
-				<span className="ml-1.5 px-1.5 py-0.5 bg-blue-100 text-blue-800 text-[10px] rounded-sm whitespace-nowrap">
-					Session Based
 				</span>
 			);
 		}

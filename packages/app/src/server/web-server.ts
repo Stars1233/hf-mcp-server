@@ -252,26 +252,10 @@ export class WebServer {
 				// Determine if transport is stateless
 				const isStateless = this.transportInfo.transport === 'streamableHttpJson';
 
-				// Get configuration for stateful transports
-				const config = this.transport.getConfiguration();
-
 				// Get sessions (empty for stateless transports)
 				const sessions = this.transport.getSessions().map((session) => {
-					// Determine connection status: Connected, Distressed, or Disconnected
 					const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
 					const hasRecentActivity = session.lastActivity > fiveMinutesAgo;
-					const hasPingFailures = (session.pingFailures || 0) >= 1;
-
-					// Note that from the WebUI this is provided as a courtesy. If a Client connects and
-					// disconnects before the Client refresh it will not be shown in the Client list.
-					let connectionStatus: 'Connected' | 'Distressed' | 'Disconnected';
-					if (!hasRecentActivity) {
-						connectionStatus = 'Disconnected';
-					} else if (hasPingFailures) {
-						connectionStatus = 'Distressed';
-					} else {
-						connectionStatus = 'Connected';
-					}
 
 					return {
 						id: session.id,
@@ -280,27 +264,13 @@ export class WebServer {
 						requestCount: session.requestCount,
 						clientInfo: session.clientInfo,
 						isConnected: hasRecentActivity,
-						connectionStatus,
-						pingFailures: session.pingFailures || 0,
-						lastPingAttempt: session.lastPingAttempt?.toISOString(),
+						connectionStatus: hasRecentActivity ? ('Connected' as const) : ('Disconnected' as const),
 						ipAddress: session.ipAddress,
 					};
 				});
 
 				// Format for API response
 				const formattedMetrics = formatMetricsForAPI(metrics, this.transportInfo.transport, isStateless, sessions);
-
-				// Add configuration if available
-				if (!isStateless && config.staleCheckInterval && config.staleTimeout) {
-					formattedMetrics.configuration = {
-						heartbeatInterval: config.heartbeatInterval || 30000,
-						staleCheckInterval: config.staleCheckInterval,
-						staleTimeout: config.staleTimeout,
-						pingEnabled: config.pingEnabled,
-						pingInterval: config.pingInterval,
-						pingFailureThreshold: config.pingFailureThreshold || 1,
-					};
-				}
 
 				// Add API metrics if in external API mode
 				if (this.transportInfo.externalApiMode) {

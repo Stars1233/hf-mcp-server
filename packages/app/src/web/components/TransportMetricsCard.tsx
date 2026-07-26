@@ -3,7 +3,6 @@ import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Alert, AlertDescription, AlertTitle } from './ui/alert';
 import { AlertTriangle } from 'lucide-react';
 import { StdioTransportMetrics } from './StdioTransportMetrics';
-import { StatefulTransportMetrics } from './StatefulTransportMetrics';
 import { StatelessTransportMetrics } from './StatelessTransportMetrics';
 import type { TransportMetricsResponse } from '../../shared/transport-metrics.js';
 
@@ -63,9 +62,5 @@ export function TransportMetricsCard() {
 		return <StdioTransportMetrics metrics={metrics} />;
 	}
 
-	if (metrics.isStateless) {
-		return <StatelessTransportMetrics metrics={metrics} />;
-	}
-
-	return <StatefulTransportMetrics metrics={metrics} />;
+	return <StatelessTransportMetrics metrics={metrics} />;
 }

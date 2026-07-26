@@ -10,9 +10,7 @@ type SessionData = {
 		version: string;
 	};
 	isConnected: boolean;
-	connectionStatus?: 'Connected' | 'Distressed' | 'Disconnected';
-	pingFailures?: number;
-	lastPingAttempt?: string;
+	connectionStatus?: 'Connected' | 'Disconnected';
 };
 
 type CachedSession = SessionData & {

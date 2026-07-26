@@ -194,7 +194,6 @@ describe('ToolSelectionStrategy', () => {
 			transport: 'streamableHttpJson',
 			port: 3000,
 			defaultHfTokenSet: false,
-			jsonResponseEnabled: true,
 			externalApiMode: false,
 			stdioClient: null,
 		};
@@ -605,7 +604,6 @@ describe('ToolSelectionStrategy', () => {
 				transport: 'streamableHttpJson',
 				port: 3000,
 				defaultHfTokenSet: false,
-				jsonResponseEnabled: true,
 				externalApiMode: true,
 				stdioClient: null,
 			};
@@ -642,7 +640,6 @@ describe('ToolSelectionStrategy', () => {
 				transport: 'streamableHttpJson',
 				port: 3000,
 				defaultHfTokenSet: false,
-				jsonResponseEnabled: true,
 				externalApiMode: true,
 				stdioClient: null,
 			};
@@ -679,7 +676,6 @@ describe('ToolSelectionStrategy', () => {
 				transport: 'streamableHttpJson',
 				port: 3000,
 				defaultHfTokenSet: false,
-				jsonResponseEnabled: true,
 				externalApiMode: true,
 				stdioClient: null,
 			};
