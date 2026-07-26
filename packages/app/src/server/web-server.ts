@@ -114,12 +114,23 @@ export class WebServer {
 		}
 
 		return new Promise((resolve, reject) => {
-			this.server = this.app
-				.listen(port, () => {
-					this.transportInfo.port = port;
-					resolve();
-				})
-				.on('error', reject);
+			const handleStartupError = (error: Error): void => {
+				this.server = null;
+				reject(error);
+			};
+			const server = this.app.listen(port, (error?: Error) => {
+				server.off('error', handleStartupError);
+				if (error) {
+					handleStartupError(error);
+					return;
+				}
+
+				this.transportInfo.port = port;
+				resolve();
+			});
+
+			this.server = server;
+			server.once('error', handleStartupError);
 		});
 	}
 
