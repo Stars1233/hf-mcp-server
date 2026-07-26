@@ -125,15 +125,13 @@ This repo contains:
 The following transports are supported:
 
 - STDIO 
-- StreamableHTTP
 - StreamableHTTP in Stateless JSON Mode (**StreamableHTTPJson**)
 
 The Web Application and HTTP Transports start by default on Port 3000.
 
-The StreamableHTTP service is available at `/mcp`. Although though not strictly enforced by the specification this is common convention.
+The StreamableHTTP service is available at `/mcp`. Although not strictly enforced by the specification, this is a common convention.
 
-> [!TIP]
-> The Web Application allows you to switch tools on and off. For STDIO and StreamableHTTP this will send a ToolListChangedNotification to the MCP Client. In StreamableHTTPJSON mode the tool will not be listed when the client next requests the tool lists.
+The Web Application reports server status and MCP method metrics. Tool selection is resolved independently for each request from the optional Hugging Face user configuration API and the `bouquet`/`mix` query parameters.
 
 ### Running Locally
 
@@ -141,8 +139,7 @@ You can run the MCP Server locally with either `npx` or `docker`.
 
 ```bash
 npx @llmindset/hf-mcp-server       # Start in STDIO mode
-npx @llmindset/hf-mcp-server-http  # Start in Streamable HTTP mode
-npx @llmindset/hf-mcp-server-json  # Start in Streamable HTTP (JSON RPC) mode
+npx @llmindset/hf-mcp-server-http  # Start in stateless Streamable HTTP JSON mode
 ```
 
 To run with docker: 
@@ -260,7 +257,8 @@ news,https://example.com/mcp,JSON
 - `tool_name`: local tool name for single-tool upstreams; identifier for the proxy source when the upstream exposes
   multiple tools.
 - `url`: Streamable HTTP MCP endpoint.
-- `response_type`: `SSE` (streamed response) or `JSON` (direct JSON-RPC response).
+- `response_type`: legacy compatibility field; `SSE` and `JSON` are both accepted. Proxy calls can still consume
+  upstream Streamable HTTP responses, while this server always returns direct JSON-RPC responses to its clients.
 
 **Tool naming**
 

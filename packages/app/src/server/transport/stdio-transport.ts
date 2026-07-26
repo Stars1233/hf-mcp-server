@@ -1,4 +1,4 @@
-import { BaseTransport, type SessionMetadata, type TransportOptions } from './base-transport.js';
+import { BaseTransport, type SessionMetadata } from './base-transport.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { logger } from '../utils/logger.js';
@@ -16,7 +16,7 @@ export class StdioTransport extends BaseTransport {
 	private readonly SESSION_ID = 'STDIO';
 	private session?: StdioSession;
 
-	override async initialize(_options: TransportOptions): Promise<void> {
+	override async initialize(): Promise<void> {
 		const transport = new StdioServerTransport();
 
 		// Create server instance using factory (null headers for STDIO)
@@ -93,12 +93,6 @@ export class StdioTransport extends BaseTransport {
 			this.trackSessionClosed(session);
 			throw error;
 		}
-	}
-
-	override getActiveConnectionCount(): number {
-		const activeConnections = this.session ? 1 : 0;
-		this.metrics.updateActiveConnections(activeConnections);
-		return activeConnections;
 	}
 
 	override async cleanup(): Promise<void> {

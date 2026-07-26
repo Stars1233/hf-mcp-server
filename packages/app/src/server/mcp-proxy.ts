@@ -1,10 +1,7 @@
-//import { datasetInfo, listFiles, repoExists } from '@huggingface/hub';
-import type { ServerFactory, ServerFactoryResult } from './transport/base-transport.js';
+import type { ServerFactory, ServerFactoryResult, ServerRequestContext } from './transport/base-transport.js';
 import { performance } from 'node:perf_hooks';
 import type { McpApiClient } from './utils/mcp-api-client.js';
-import type { WebServer } from './web-server.js';
 import type { AppSettings } from '../shared/settings.js';
-import { GRADIO_IMAGE_FILTER_FLAG } from '../shared/behavior-flags.js';
 import { logger } from './utils/logger.js';
 import { convertJsonSchemaToZod, registerRemoteTools } from './gradio-endpoint-connector.js';
 import { extractAuthBouquetAndMix } from './utils/auth-utils.js';
@@ -13,8 +10,6 @@ import { getGradioSpaces } from './utils/gradio-discovery.js';
 import { logToolQuery, type QueryLoggerOptions } from './utils/query-logger.js';
 import type { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js';
-import type { ServerNotification, ServerRequest } from '@modelcontextprotocol/sdk/types.js';
 import { createRequire } from 'module';
 import { createGradioWidgetResourceConfig } from './resources/gradio-widget-resource.js';
 import { callStreamableHttpTool, readStreamableHttpResource } from './utils/streamable-http-tool-caller.js';
@@ -24,7 +19,6 @@ import { rewriteProxyAppToolMeta } from './utils/proxy-apps.js';
 import { parseDisabledTools } from './utils/disabled-tools.js';
 
 const MCP_APP_RESOURCE_MIME_TYPE = 'text/html;profile=mcp-app';
-type ProxyToolHandlerExtra = RequestHandlerExtra<ServerRequest, ServerNotification>;
 
 function isDuplicateRegistrationError(error: unknown): boolean {
 	return error instanceof Error && /already registered/i.test(error.message);
@@ -60,21 +54,20 @@ function registerProxyToolsFromConfig(
 		const title = config.proxyId ? `${config.proxyId} - ${config.upstreamToolName}` : config.toolName;
 		const schemaShape = buildProxyToolSchemaShape(config.inputSchema);
 		const { meta, resourceMapping } = rewriteProxyAppToolMeta(config.meta, config.proxyId, config.upstreamToolName);
-		const handler = async (params: Record<string, unknown>, extra: ProxyToolHandlerExtra) => {
+		const handler = async (params: Record<string, unknown>) => {
 			const start = performance.now();
 			logger.trace(
 				{
 					toolName: config.toolName,
 					serverUrl: config.url,
 					upstreamToolName: config.upstreamToolName,
-					progressToken: extra?._meta?.progressToken ?? null,
 					paramKeys: Object.keys(params ?? {}),
 				},
 				'Streamable proxy tool call received'
 			);
 
 			try {
-				const result = await callStreamableHttpTool(config.url, config.upstreamToolName, params, hfToken, extra);
+				const result = await callStreamableHttpTool(config.url, config.upstreamToolName, params, hfToken);
 
 				logToolQuery(config.toolName, config.upstreamToolName, params, {
 					...baseLoggingOptions,
@@ -215,7 +208,6 @@ function buildProxyToolSchemaShape(inputSchema?: ProxyToolInputSchema): Record<s
  * Creates a proxy ServerFactory that adds remote tools to the original server.
  */
 export const createProxyServerFactory = (
-	_webServerInstance: WebServer,
 	sharedApiClient: McpApiClient,
 	originalServerFactory: ServerFactory
 ): ServerFactory => {
@@ -223,11 +215,7 @@ export const createProxyServerFactory = (
 		headers: Record<string, string> | null,
 		userSettings?: AppSettings,
 		skipGradio?: boolean,
-		sessionInfo?: {
-			clientSessionId?: string;
-			isAuthenticated?: boolean;
-			clientInfo?: { name: string; version: string };
-		}
+		sessionInfo?: ServerRequestContext
 	): Promise<ServerFactoryResult> => {
 		logger.debug({ skipGradio }, '=== PROXY FACTORY CALLED ===');
 
@@ -251,7 +239,7 @@ export const createProxyServerFactory = (
 
 		// Create the original server instance with user settings
 		const result = await originalServerFactory(headers, settings, skipGradio, sessionInfo);
-		const { server, userDetails, enabledToolIds } = result;
+		const { server, enabledToolIds, behaviorFlags } = result;
 		const proxyTools = getProxyToolsConfig();
 
 		// Register Streamable HTTP MCP tools regardless of Gradio skipping
@@ -268,8 +256,7 @@ export const createProxyServerFactory = (
 			return result;
 		}
 
-		const noImageFromSettings = settings?.builtInTools?.includes(GRADIO_IMAGE_FILTER_FLAG) ?? false;
-		const stripImageContent = noImageFromHeader || noImageFromSettings;
+		const stripImageContent = noImageFromHeader || behaviorFlags?.stripGradioImages === true;
 
 		// Skip Gradio endpoints if explicitly disabled
 		if (gradio === 'none') {
@@ -285,11 +272,6 @@ export const createProxyServerFactory = (
 				'Bouquet specified (not "all") and no explicit gradio param, skipping Gradio endpoints from settings'
 			);
 			return result;
-		}
-
-		// Now we have access to userDetails if needed
-		if (userDetails) {
-			logger.debug(`Proxy has access to user details for: ${userDetails.name}`);
 		}
 
 		// Collect all space names from gradio param and settings

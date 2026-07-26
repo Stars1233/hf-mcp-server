@@ -75,7 +75,7 @@ export const HF_FS_SCHEMA = z.object({
 
 export type HfFsRequest = z.input<typeof HF_FS_SCHEMA>;
 
-export interface ParsedHfFsRequest {
+interface ParsedHfFsRequest {
 	params: HfFsParams;
 	warnings: string[];
 }

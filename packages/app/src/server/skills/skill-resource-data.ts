@@ -7,7 +7,7 @@ export const SKILL_INDEX_URI = 'skill://index.json';
 // is effectively a single page in practice; pagination is implemented for spec conformance.
 const DIR_PAGE_SIZE = 500;
 
-export interface ListedSkillResource {
+interface ListedSkillResource {
 	uri: string;
 	name: string;
 	description?: string;
@@ -19,11 +19,11 @@ interface BaseSkillResourceContent {
 	mimeType: string;
 }
 
-export type SkillResourceContent =
+type SkillResourceContent =
 	| (BaseSkillResourceContent & { text: string })
 	| (BaseSkillResourceContent & { blob: string });
 
-export interface SkillDirectoryListing {
+interface SkillDirectoryListing {
 	resources: { uri: string; name: string; mimeType: string }[];
 	nextCursor?: string;
 }
@@ -84,7 +84,7 @@ export function readSkillDirectory(
 	catalog: SkillCatalog,
 	uri: string,
 	cursor?: string,
-	pageSize: number = DIR_PAGE_SIZE,
+	pageSize: number = DIR_PAGE_SIZE
 ): SkillDirectoryListing | null {
 	// Normalise away a trailing slash; directory URIs are stored without one.
 	const normalised = uri.endsWith('/') ? uri.slice(0, -1) : uri;

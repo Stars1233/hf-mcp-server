@@ -4,22 +4,26 @@ import { logger } from '../utils/logger.js';
 import type { TransportMetrics } from '../../shared/transport-metrics.js';
 import { MetricsCounter } from '../../shared/transport-metrics.js';
 import type { AppSettings } from '../../shared/settings.js';
+import type { ToolBehaviorFlags } from '../../shared/behavior-flags.js';
 import { whoAmI, HubApiError, type WhoAmI } from '@huggingface/hub';
 import { extractAuthBouquetAndMix } from '../utils/auth-utils.js';
 import { getMetricsSafeName } from '../utils/gradio-metrics.js';
 import { isGradioTool } from '../utils/gradio-utils.js';
-import { getProxyToolDefinition, type ProxyToolResponseType } from '../utils/proxy-tools-config.js';
-
-const HF_SANDBOX_TOOL_NAME = 'hf_sandbox';
-const HF_SANDBOX_EXEC_TOOL_NAME = 'hf_sandbox_exec';
 
 /**
  * Result returned by ServerFactory containing the server instance and optional user details
  */
 export interface ServerFactoryResult {
 	server: McpServer;
-	userDetails?: WhoAmI;
 	enabledToolIds?: string[];
+	behaviorFlags?: ToolBehaviorFlags;
+}
+
+export interface ServerRequestContext {
+	clientSessionId?: string;
+	isAuthenticated?: boolean;
+	clientInfo?: { name: string; version: string };
+	authenticatedUser?: WhoAmI;
 }
 
 /**
@@ -31,17 +35,8 @@ export type ServerFactory = (
 	headers: Record<string, string> | null,
 	userSettings?: AppSettings,
 	skipGradio?: boolean,
-	sessionInfo?: {
-		clientSessionId?: string;
-		isAuthenticated?: boolean;
-		clientInfo?: { name: string; version: string };
-	}
+	sessionInfo?: ServerRequestContext
 ) => Promise<ServerFactoryResult>;
-
-export interface TransportOptions {
-	port?: number;
-	onClientInfoUpdate?: (clientInfo: { name: string; version: string }) => void;
-}
 
 /**
  * Standardized session metadata structure for all transports
@@ -65,11 +60,6 @@ export interface SessionMetadata {
 }
 
 /**
- * Special constant for stateless transports to distinguish from zero active connections
- */
-export const STATELESS_MODE = -1;
-
-/**
  * Base class for all transport implementations
  */
 export abstract class BaseTransport {
@@ -86,24 +76,12 @@ export abstract class BaseTransport {
 	/**
 	 * Initialize the transport with the given options
 	 */
-	abstract initialize(options: TransportOptions): Promise<void>;
+	abstract initialize(): Promise<void>;
 
 	/**
 	 * Clean up the transport resources
 	 */
 	abstract cleanup(): Promise<void>;
-
-	/**
-	 * Mark transport as shutting down
-	 * Optional method for transports that need to reject new connections
-	 */
-	shutdown?(): void;
-
-	/**
-	 * Get the number of active connections
-	 * Returns -1 (STATELESS_MODE) for stateless transports
-	 */
-	abstract getActiveConnectionCount(): number;
 
 	/**
 	 * Get all active sessions with their metadata
@@ -203,13 +181,6 @@ export abstract class BaseTransport {
 	}
 
 	/**
-	 * Mark a client connection as disconnected
-	 */
-	protected disconnectClient(clientInfo?: { name: string; version: string }): void {
-		this.metrics.disconnectClient(clientInfo);
-	}
-
-	/**
 	 * Extract method name from JSON-RPC request body for tracking
 	 * Handles special cases for tools/call and prompts/get to include tool/prompt names
 	 * Returns null for responses (which should not be tracked as methods)
@@ -297,59 +268,6 @@ export abstract class BaseTransport {
 		return false;
 	}
 
-	/**
-	 * Determines if a request is a tools/call targeting a Streamable HTTP proxy tool
-	 * that should respond over SSE (response_type=SSE).
-	 */
-	protected isStreamableHttpToolCall(requestBody: unknown): boolean {
-		const body = requestBody as { method?: string; params?: { name?: string } } | undefined;
-		const methodName = body?.method || 'unknown';
-
-		if (methodName === 'tools/call' && body?.params && typeof body.params === 'object' && 'name' in body.params) {
-			const toolName = body.params.name;
-			if (typeof toolName === 'string') {
-				const responseType = this.getStreamableHttpResponseType(toolName);
-				return responseType === 'SSE';
-			}
-		}
-
-		return false;
-	}
-
-	protected isSandboxExecToolCall(requestBody: unknown): boolean {
-		const body = requestBody as { method?: string; params?: { name?: string } } | undefined;
-		return body?.method === 'tools/call' && body.params?.name === HF_SANDBOX_EXEC_TOOL_NAME;
-	}
-
-	protected isSandboxCreateToolCall(requestBody: unknown): boolean {
-		const body = requestBody as
-			| { method?: string; params?: { name?: string; arguments?: { cmd?: string } } }
-			| undefined;
-		return (
-			body?.method === 'tools/call' &&
-			body.params?.name === HF_SANDBOX_TOOL_NAME &&
-			body.params.arguments?.cmd === 'create'
-		);
-	}
-
-	protected requiresStreamingToolResponse(requestBody: unknown): boolean {
-		return (
-			this.isGradioToolCall(requestBody) ||
-			this.isStreamableHttpToolCall(requestBody) ||
-			this.isSandboxExecToolCall(requestBody) ||
-			this.isSandboxCreateToolCall(requestBody)
-		);
-	}
-
-	private getStreamableHttpResponseType(toolName: string): ProxyToolResponseType | undefined {
-		const config = getProxyToolDefinition(toolName);
-		if (config) {
-			return config.responseType;
-		}
-
-		return undefined;
-	}
-
 	protected skipGradioSetup(requestBody: unknown): boolean {
 		const body = requestBody as { method?: string; params?: { name?: string } } | undefined;
 
@@ -408,15 +326,15 @@ export abstract class BaseTransport {
 	 */
 	protected async validateAuthAndTrackMetrics(
 		headers: Record<string, string>
-	): Promise<{ shouldContinue: boolean; statusCode?: number; userIdentified: boolean }> {
+	): Promise<{ shouldContinue: boolean; statusCode?: number; userIdentified: boolean; authenticatedUser?: WhoAmI }> {
 		const { hfToken } = extractAuthBouquetAndMix(headers);
 
 		if (hfToken) {
 			try {
-				await whoAmI({ credentials: { accessToken: hfToken } });
+				const authenticatedUser = await whoAmI({ credentials: { accessToken: hfToken } });
 				// Track authenticated connection
 				this.metrics.trackAuthenticatedConnection();
-				return { shouldContinue: true, userIdentified: true };
+				return { shouldContinue: true, userIdentified: true, authenticatedUser };
 			} catch (error) {
 				// Check for 401 status in multiple possible locations
 				const errorObj = error as { statusCode?: number; status?: number };

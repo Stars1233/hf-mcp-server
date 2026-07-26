@@ -14,7 +14,6 @@ interface ApplicationOptions {
 	transportType: TransportType;
 	webAppPort: number;
 	webServerInstance: WebServer;
-	apiClientConfig?: ApiClientConfig;
 }
 
 /**
@@ -61,7 +60,7 @@ export class Application {
 			logger.info(`Using external API client with user config API: ${userConfigApi}`);
 		} else {
 			// Use immutable built-in settings when no per-user API is configured.
-			apiClientConfig = options.apiClientConfig || {
+			apiClientConfig = {
 				type: 'static',
 			};
 			logger.info('Using immutable built-in tool settings');
@@ -69,10 +68,10 @@ export class Application {
 		this.apiClient = new McpApiClient(apiClientConfig, transportInfo);
 
 		// This creates our MCP Server with the standard tools.
-		const originalServerFactory = createServerFactory(this.webServerInstance, this.apiClient);
+		const originalServerFactory = createServerFactory(this.apiClient);
 
 		// This adds the Gradio endpoints to the original MCP Server.
-		this.serverFactory = createProxyServerFactory(this.webServerInstance, this.apiClient, originalServerFactory);
+		this.serverFactory = createProxyServerFactory(this.apiClient, originalServerFactory);
 
 		// Get Express app instance
 		this.appInstance = this.webServerInstance.getApp();
@@ -109,9 +108,7 @@ export class Application {
 			// Pass transport to web server for session management
 			this.webServerInstance.setTransport(this.transport);
 
-			await this.transport.initialize({
-				port: this.webAppPort,
-			});
+			await this.transport.initialize();
 		} catch (error) {
 			logger.error({ error }, `Error initializing ${this.transportType} transport`);
 			throw error;
@@ -133,11 +130,6 @@ export class Application {
 	}
 
 	async stop(): Promise<void> {
-		// Signal transport to stop accepting new connections
-		if (this.transport?.shutdown) {
-			this.transport.shutdown();
-		}
-
 		logger.info('Shutting down web server...');
 		await this.webServerInstance.stop();
 
@@ -145,10 +137,6 @@ export class Application {
 		if (this.transport) {
 			await this.transport.cleanup();
 		}
-	}
-
-	getExpressApp(): Express {
-		return this.appInstance;
 	}
 }
 

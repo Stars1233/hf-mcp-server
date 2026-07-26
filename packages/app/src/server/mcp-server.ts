@@ -1,9 +1,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { CallToolResult, ServerNotification, ServerRequest } from '@modelcontextprotocol/sdk/types.js';
-import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js';
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { z } from 'zod';
 import { performance } from 'node:perf_hooks';
-import { whoAmI, type WhoAmI } from '@huggingface/hub';
+import { whoAmI } from '@huggingface/hub';
 import {
 	RepoSearchTool,
 	REPO_SEARCH_TOOL_CONFIG,
@@ -14,7 +13,6 @@ import {
 	HUB_REPO_DETAILS_TOOL_CONFIG,
 	HubInspectTool,
 	type HubInspectParams,
-	HF_FILES_FLAG,
 	HF_FS_TOOL_CONFIG,
 	HF_FS_TOOL_ID,
 	HfFsTool,
@@ -35,7 +33,6 @@ import {
 	type HfSandboxParams,
 	type HfSandboxExecParams,
 	type HfSandboxFsParams,
-	type SandboxProgress,
 	getDynamicSpaceToolConfig,
 	SpaceTool,
 	type SpaceArgs,
@@ -44,19 +41,13 @@ import {
 	VIEW_PARAMETERS,
 } from '@llmindset/hf-mcp';
 
-import type { ServerFactory, ServerFactoryResult } from './transport/base-transport.js';
+import type { ServerFactory, ServerFactoryResult, ServerRequestContext } from './transport/base-transport.js';
 import type { McpApiClient } from './utils/mcp-api-client.js';
-import type { WebServer } from './web-server.js';
 import { logger } from './utils/logger.js';
 import { logToolQuery, logGradioEvent, type QueryLoggerOptions } from './utils/query-logger.js';
 import type { AppSettings } from '../shared/settings.js';
 import { extractAuthBouquetAndMix } from './utils/auth-utils.js';
-import {
-	ANONYMOUS_BUILTIN_TOOL_IDS,
-	ToolSelectionStrategy,
-	type ToolSelectionContext,
-} from './utils/tool-selection-strategy.js';
-import { hasReadmeFlag } from '../shared/behavior-flags.js';
+import { ToolSelectionStrategy, type ToolSelectionContext } from './utils/tool-selection-strategy.js';
 import { registerCapabilities } from './utils/capability-utils.js';
 import { createGradioWidgetResourceConfig } from './resources/gradio-widget-resource.js';
 import { applyResultPostProcessing, type GradioToolCallOptions } from './utils/gradio-tool-caller.js';
@@ -66,27 +57,17 @@ import { getSkillCatalog } from './skills/skill-catalog-cache.js';
 import { SERVER_VERSION } from './server-build-info.js';
 import { parseDisabledTools } from './utils/disabled-tools.js';
 
-// Fallback settings for anonymous users and unavailable API/user settings.
-export const BOUQUET_FALLBACK: AppSettings = {
-	builtInTools: [...ANONYMOUS_BUILTIN_TOOL_IDS],
-	spaceTools: [],
-};
-
 // Bouquet configurations moved to tool-selection-strategy.ts
 
 /**
  * Creates request-scoped MCP servers containing only the tools selected for that request.
  */
-export const createServerFactory = (_webServerInstance: WebServer, sharedApiClient: McpApiClient): ServerFactory => {
+export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactory => {
 	return async (
 		headers: Record<string, string> | null,
 		userSettings?: AppSettings,
 		skipGradio?: boolean,
-		sessionInfo?: {
-			clientSessionId?: string;
-			isAuthenticated?: boolean;
-			clientInfo?: { name: string; version: string };
-		}
+		sessionInfo?: ServerRequestContext
 	): Promise<ServerFactoryResult> => {
 		logger.debug({ skipGradio, sessionInfo }, '=== CREATING NEW MCP SERVER INSTANCE ===');
 		// Extract auth using shared utility
@@ -100,9 +81,12 @@ export const createServerFactory = (_webServerInstance: WebServer, sharedApiClie
 			'Direct the User to set their HF_TOKEN (instructions at https://hf.co/settings/mcp/), or ' +
 			'create an account at https://hf.co/join for higher limits.';
 		let username: string | undefined;
-		let userDetails: WhoAmI | undefined;
+		let userDetails = sessionInfo?.authenticatedUser;
 
-		if (hfToken) {
+		if (userDetails) {
+			username = userDetails.name;
+			userInfo = `Hugging Face tools are being used by authenticated user '${userDetails.name}'`;
+		} else if (hfToken && headers === null) {
 			try {
 				userDetails = await whoAmI({ credentials: { accessToken: hfToken } });
 				username = userDetails.name;
@@ -333,7 +317,7 @@ export const createServerFactory = (_webServerInstance: WebServer, sharedApiClie
 		}
 
 		// Compute README availability; adjust description and schema accordingly
-		const hubInspectReadmeAllowed = hasReadmeFlag(toolSelection.enabledToolIds);
+		const hubInspectReadmeAllowed = toolSelection.behaviorFlags.allowReadmeInclude;
 		const hubInspectDescription = hubInspectReadmeAllowed
 			? `${HUB_REPO_DETAILS_TOOL_CONFIG.description} README file may be requested from the external repository.`
 			: HUB_REPO_DETAILS_TOOL_CONFIG.description;
@@ -456,7 +440,7 @@ export const createServerFactory = (_webServerInstance: WebServer, sharedApiClie
 			);
 		}
 
-		if (hfToken && toolSelection.enabledToolIds.includes(HF_FILES_FLAG)) {
+		if (hfToken && toolSelection.behaviorFlags.enableHfFsWrite) {
 			const hfFsWriteToolConfig = HfFsWriteTool.createToolConfig();
 			if (shouldRegisterFixedTool(hfFsWriteToolConfig.name)) {
 				server.registerTool(
@@ -556,57 +540,6 @@ export const createServerFactory = (_webServerInstance: WebServer, sharedApiClie
 				})
 			);
 		};
-		const createSandboxProgressRelay = (
-			extra: RequestHandlerExtra<ServerRequest, ServerNotification> | undefined
-		): ((progress: SandboxProgress) => Promise<void>) | undefined => {
-			const progressToken = extra?._meta?.progressToken;
-			logger.trace({ hasExtra: Boolean(extra), progressToken: progressToken ?? null }, 'Sandbox progress setup');
-			if (progressToken === undefined || (typeof progressToken !== 'number' && typeof progressToken !== 'string')) {
-				logger.trace({ hasExtra: Boolean(extra) }, 'Sandbox progress relay disabled');
-				return undefined;
-			}
-
-			let progressCount = 0;
-			let disabled = false;
-
-			return async (progress: SandboxProgress): Promise<void> => {
-				if (disabled || !extra) {
-					return;
-				}
-				if (extra.signal?.aborted) {
-					disabled = true;
-					return;
-				}
-
-				progressCount += 1;
-				try {
-					logger.trace({ progressToken, progress }, 'Relaying sandbox progress');
-					const params: {
-						progressToken: number | string;
-						progress: number;
-						total?: number;
-						message?: string;
-					} = {
-						progressToken,
-						progress: progress.progress ?? progressCount,
-					};
-					if (progress.total !== undefined) {
-						params.total = progress.total;
-					}
-					if (progress.message !== undefined) {
-						params.message = `${String(progressCount)}. ${progress.message}`;
-					}
-
-					await extra.sendNotification({
-						method: 'notifications/progress',
-						params,
-					});
-				} catch (error) {
-					disabled = true;
-					logger.trace({ error }, 'Sandbox progress relay failed');
-				}
-			};
-		};
 
 		const sandboxToolConfig = HfSandboxTool.createToolConfig(username);
 		if (shouldRegisterSelectedTool(sandboxToolConfig.name)) {
@@ -619,9 +552,8 @@ export const createServerFactory = (_webServerInstance: WebServer, sharedApiClie
 					outputSchema: sandboxToolConfig.outputSchema.shape,
 					annotations: sandboxToolConfig.annotations,
 				},
-				async (params: HfSandboxParams, extra) => {
+				async (params: HfSandboxParams) => {
 					const isAuthenticated = !!hfToken;
-					const onProgress = createSandboxProgressRelay(extra);
 					const result = await runWithQueryLogging(
 						logToolQuery,
 						{
@@ -637,7 +569,7 @@ export const createServerFactory = (_webServerInstance: WebServer, sharedApiClie
 						},
 						async () => {
 							const sandboxTool = new HfSandboxTool(hfToken, isAuthenticated, username);
-							return sandboxTool.run(params, onProgress ? { onProgress } : undefined);
+							return sandboxTool.run(params);
 						}
 					);
 
@@ -660,9 +592,8 @@ export const createServerFactory = (_webServerInstance: WebServer, sharedApiClie
 					outputSchema: sandboxExecToolConfig.outputSchema.shape,
 					annotations: sandboxExecToolConfig.annotations,
 				},
-				async (params: HfSandboxExecParams, extra) => {
+				async (params: HfSandboxExecParams) => {
 					const isAuthenticated = !!hfToken;
-					const onProgress = createSandboxProgressRelay(extra);
 					const result = await runWithQueryLogging(
 						logToolQuery,
 						{
@@ -678,7 +609,7 @@ export const createServerFactory = (_webServerInstance: WebServer, sharedApiClie
 						},
 						async () => {
 							const sandboxExecTool = new HfSandboxExecTool(hfToken, isAuthenticated, username);
-							return sandboxExecTool.run(params, onProgress ? { onProgress } : undefined);
+							return sandboxExecTool.run(params);
 						}
 					);
 
@@ -741,7 +672,7 @@ export const createServerFactory = (_webServerInstance: WebServer, sharedApiClie
 					inputSchema: dynamicSpaceToolConfig.schema.shape,
 					annotations: dynamicSpaceToolConfig.annotations,
 				},
-				async (params: SpaceArgs, extra) => {
+				async (params: SpaceArgs) => {
 					// Check if invoke operation is disabled by gradio=none
 					const { gradio } = extractAuthBouquetAndMix(headers);
 					if (params.operation === 'invoke' && gradio === 'none') {
@@ -763,14 +694,13 @@ export const createServerFactory = (_webServerInstance: WebServer, sharedApiClie
 
 						try {
 							const spaceTool = new SpaceTool(hfToken);
-							const result = await spaceTool.execute(params, extra);
+							const result = await spaceTool.execute(params);
 
 							if ('result' in result && result.result) {
 								const invokeResult = result as InvokeResult;
 								success = !invokeResult.isError;
 
-								const stripImageContent =
-									noImageContentHeaderEnabled || toolSelection.enabledToolIds.includes('NO_GRADIO_IMAGE_CONTENT');
+								const stripImageContent = noImageContentHeaderEnabled || toolSelection.behaviorFlags.stripGradioImages;
 								const postProcessOptions: GradioToolCallOptions = {
 									stripImageContent,
 									toolName: dynamicSpaceToolConfig.name,
@@ -863,7 +793,7 @@ export const createServerFactory = (_webServerInstance: WebServer, sharedApiClie
 						},
 						async () => {
 							const spaceTool = new SpaceTool(hfToken);
-							const result = await spaceTool.execute(params, extra);
+							const result = await spaceTool.execute(params);
 							return result as ToolResult;
 						}
 					);
@@ -912,6 +842,10 @@ export const createServerFactory = (_webServerInstance: WebServer, sharedApiClie
 			hasSkills,
 		});
 
-		return { server, userDetails, enabledToolIds: toolSelection.enabledToolIds };
+		return {
+			server,
+			enabledToolIds: toolSelection.enabledToolIds,
+			behaviorFlags: toolSelection.behaviorFlags,
+		};
 	};
 };

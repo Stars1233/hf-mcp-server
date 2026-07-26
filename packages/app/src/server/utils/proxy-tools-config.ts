@@ -5,7 +5,7 @@ import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { fetchWithProfile, NETWORK_FETCH_PROFILES, parseAndValidateUrl } from '@llmindset/hf-mcp/network';
 import { logger } from './logger.js';
 
-export type ProxyToolResponseType = 'JSON' | 'SSE';
+type ProxyToolResponseType = 'JSON' | 'SSE';
 
 interface ProxyToolSource {
 	proxyId: string;
@@ -18,7 +18,6 @@ export interface ProxyToolDefinition {
 	toolName: string;
 	upstreamToolName: string;
 	url: string;
-	responseType: ProxyToolResponseType;
 	description?: string;
 	inputSchema?: ProxyToolInputSchema;
 	meta?: Record<string, unknown>;
@@ -48,14 +47,9 @@ const PROXY_TOOL_URL_POLICY = NETWORK_FETCH_PROFILES.httpOrHttpsPermissive().url
 
 let cachedTools: ProxyToolDefinition[] | null = null;
 let cachedConfigPromise: Promise<ProxyToolDefinition[]> | null = null;
-let cachedToolsByName: Map<string, ProxyToolDefinition> = new Map();
 
 export function getProxyToolsConfig(): ProxyToolDefinition[] {
 	return cachedTools ?? [];
-}
-
-export function getProxyToolDefinition(toolName: string): ProxyToolDefinition | undefined {
-	return cachedToolsByName.get(toolName);
 }
 
 export async function loadProxyToolsConfig(): Promise<ProxyToolDefinition[]> {
@@ -70,7 +64,6 @@ export async function loadProxyToolsConfig(): Promise<ProxyToolDefinition[]> {
 		const source = process.env[PROXY_TOOLS_ENV_VAR]?.trim();
 		if (!source) {
 			cachedTools = [];
-			cachedToolsByName = new Map();
 			logger.debug({ envVar: PROXY_TOOLS_ENV_VAR }, 'Proxy tools CSV not configured');
 			return cachedTools;
 		}
@@ -84,14 +77,12 @@ export async function loadProxyToolsConfig(): Promise<ProxyToolDefinition[]> {
 				if (!response.ok) {
 					logger.error({ status: response.status, source }, 'Failed to fetch proxy tools CSV');
 					cachedTools = [];
-					cachedToolsByName = new Map();
 					return cachedTools;
 				}
 				content = await response.text();
 			} catch (error) {
 				logger.error({ error, source }, 'Error fetching proxy tools CSV');
 				cachedTools = [];
-				cachedToolsByName = new Map();
 				return cachedTools;
 			}
 		} else {
@@ -100,7 +91,6 @@ export async function loadProxyToolsConfig(): Promise<ProxyToolDefinition[]> {
 			} catch (error) {
 				logger.error({ error, source }, 'Proxy tools CSV file not found');
 				cachedTools = [];
-				cachedToolsByName = new Map();
 				return cachedTools;
 			}
 		}
@@ -111,18 +101,11 @@ export async function loadProxyToolsConfig(): Promise<ProxyToolDefinition[]> {
 			logger.error('Proxy tools configured but no tool schemas were loaded');
 		}
 		cachedTools = toolDefinitions;
-		cachedToolsByName = new Map(toolDefinitions.map((entry) => [entry.toolName, entry]));
 		logger.info({ toolCount: toolDefinitions.length }, 'Loaded proxy tools configuration');
 		return toolDefinitions;
 	})();
 
 	return cachedConfigPromise;
-}
-
-export function resetProxyToolsConfigForTest(): void {
-	cachedTools = null;
-	cachedConfigPromise = null;
-	cachedToolsByName = new Map();
 }
 
 async function loadProxyToolSchemas(sources: ProxyToolSource[]): Promise<ProxyToolDefinition[]> {
@@ -198,7 +181,6 @@ function buildProxyToolDefinition(source: ProxyToolSource, tool: Tool, toolName:
 		toolName,
 		upstreamToolName: tool.name,
 		url: source.url,
-		responseType: source.responseType,
 		description: tool.description,
 		inputSchema,
 		meta: tool._meta,

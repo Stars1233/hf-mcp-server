@@ -4,7 +4,7 @@ import { normalizeParsedTools, parseGradioSchemaResponse } from './gradio-schema
 
 const SPACE_HTTP_TIMEOUT_MS = 10_000;
 
-export interface SpaceMetadata {
+interface SpaceMetadata {
 	subdomain: string;
 	private: boolean;
 }

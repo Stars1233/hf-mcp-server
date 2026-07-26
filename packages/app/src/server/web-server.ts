@@ -100,10 +100,6 @@ export class WebServer {
 		this.transportInfo = info;
 	}
 
-	public setClientInfo(clientInfo: { name: string; version: string } | null): void {
-		this.transportInfo.stdioClient = clientInfo;
-	}
-
 	public setTransport(transport: BaseTransport): void {
 		this.transport = transport;
 	}

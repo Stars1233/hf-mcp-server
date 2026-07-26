@@ -2,6 +2,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { StatelessHttpTransport } from '../../../src/server/transport/stateless-http-transport.js';
 import type { ServerFactory } from '../../../src/server/transport/base-transport.js';
+import { formatMetricsForAPI } from '../../../src/shared/transport-metrics.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import express from 'express';
 
 describe('StatelessHttpTransport', () => {
@@ -136,37 +138,10 @@ describe('StatelessHttpTransport', () => {
 			expect(result).toBe(false);
 		});
 
-		it('should not skip setup for dynamic_space invoke calls that need streaming/progress handling', () => {
+		it('should not skip setup for dynamic_space invoke calls', () => {
 			const result = (transport as any).skipGradioSetup({
 				method: 'tools/call',
 				params: { name: 'dynamic_space', arguments: { operation: 'invoke' } },
-			});
-
-			expect(result).toBe(false);
-		});
-
-		it('identifies sandbox exec calls as requiring streaming/progress handling', () => {
-			const result = (transport as any).requiresStreamingToolResponse({
-				method: 'tools/call',
-				params: { name: 'hf_sandbox_exec' },
-			});
-
-			expect(result).toBe(true);
-		});
-
-		it('identifies sandbox create calls as requiring streaming/progress handling', () => {
-			const result = (transport as any).requiresStreamingToolResponse({
-				method: 'tools/call',
-				params: { name: 'hf_sandbox', arguments: { cmd: 'create', args: [] } },
-			});
-
-			expect(result).toBe(true);
-		});
-
-		it('does not stream non-create sandbox management calls', () => {
-			const result = (transport as any).requiresStreamingToolResponse({
-				method: 'tools/call',
-				params: { name: 'hf_sandbox', arguments: { cmd: 'status', args: ['hfsb2:user:job'] } },
 			});
 
 			expect(result).toBe(false);
@@ -235,10 +210,124 @@ describe('StatelessHttpTransport', () => {
 			await (transport as any).handleJsonRpcRequest(req, res);
 
 			const methodMetrics = transport.getMetrics().methods.get('resources/subscribe:skill://example/SKILL.md');
-			expect(methodMetrics?.count).toBe(1);
+			expect(methodMetrics).toMatchObject({ count: 1, errors: 1 });
 			expect(methodMetrics?.byClient.get(clientInfo.name)?.count).toBe(1);
 			expect(mockServerFactory).not.toHaveBeenCalled();
 			expect(res.status).toHaveBeenCalledWith(200);
+		});
+	});
+
+	describe('production request path', () => {
+		it('preserves bouquet and mix query parameters and exposes initialize dashboard metrics', async () => {
+			process.env.ANALYTICS_MODE = 'true';
+			const app = express();
+			app.use(express.json());
+			const serverFactory = vi.fn(async () => ({
+				server: new McpServer({ name: 'stateless-test', version: '1.0.0' }),
+				enabledToolIds: [],
+			}));
+			transport = new StatelessHttpTransport(serverFactory, app);
+			await transport.initialize();
+
+			const httpServer = app.listen(0);
+
+			try {
+				await new Promise<void>((resolve, reject) => {
+					httpServer.once('listening', resolve);
+					httpServer.once('error', reject);
+				});
+				const address = httpServer.address();
+				if (!address || typeof address === 'string') {
+					throw new Error('Expected the test server to listen on a TCP port');
+				}
+
+				const response = await fetch(`http://127.0.0.1:${address.port}/mcp?bouquet=search&mix=sandbox`, {
+					method: 'POST',
+					headers: {
+						accept: 'application/json, text/event-stream',
+						'content-type': 'application/json',
+					},
+					body: JSON.stringify({
+						jsonrpc: '2.0',
+						id: 1,
+						method: 'initialize',
+						params: {
+							protocolVersion: '2025-03-26',
+							capabilities: {},
+							clientInfo: { name: 'contract-test', version: '1.0.0' },
+						},
+					}),
+				});
+
+				expect(response.status).toBe(200);
+				const sessionId = response.headers.get('mcp-session-id');
+				expect(sessionId).toBeTruthy();
+				expect(serverFactory).toHaveBeenCalledTimes(1);
+				expect(serverFactory.mock.calls[0]?.[0]).toMatchObject({
+					'x-mcp-bouquet': 'search',
+					'x-mcp-mix': 'sandbox',
+				});
+
+				const metrics = transport.getMetrics();
+				expect(metrics.methods.get('initialize')).toMatchObject({ count: 1, errors: 0 });
+				expect(metrics.sessions.created).toBe(1);
+				expect(metrics.connections.active).toBe(1);
+				expect(transport.getSessions()).toHaveLength(1);
+
+				const dashboardMetrics = formatMetricsForAPI(metrics, 'streamableHttpJson', true, [
+					{
+						id: sessionId ?? '',
+						connectedAt: transport.getSessions()[0]?.connectedAt.toISOString() ?? '',
+						lastActivity: transport.getSessions()[0]?.lastActivity.toISOString() ?? '',
+						requestCount: 1,
+						clientInfo: { name: 'contract-test', version: '1.0.0' },
+						isConnected: true,
+						connectionStatus: 'Connected',
+					},
+				]);
+				expect(dashboardMetrics.methods).toContainEqual(
+					expect.objectContaining({ method: 'initialize', count: 1, errors: 0 })
+				);
+				expect(dashboardMetrics.sessions).toHaveLength(1);
+
+				const unknownToolResponse = await fetch(`http://127.0.0.1:${address.port}/mcp`, {
+					method: 'POST',
+					headers: {
+						accept: 'application/json, text/event-stream',
+						'content-type': 'application/json',
+						'mcp-session-id': sessionId ?? '',
+					},
+					body: JSON.stringify({
+						jsonrpc: '2.0',
+						id: 2,
+						method: 'tools/call',
+						params: { name: 'missing_tool', arguments: {} },
+					}),
+				});
+				expect(unknownToolResponse.status).toBe(200);
+				expect(await unknownToolResponse.json()).toMatchObject({ error: expect.any(Object) });
+				expect(transport.getMetrics().methods.get('tools/call:missing_tool')).toMatchObject({
+					count: 1,
+					errors: 1,
+				});
+
+				const deleteResponse = await fetch(`http://127.0.0.1:${address.port}/mcp`, {
+					method: 'DELETE',
+					headers: { 'mcp-session-id': sessionId ?? '' },
+				});
+				expect(deleteResponse.status).toBe(200);
+				expect(transport.getMetrics().sessions.deleted).toBe(1);
+				expect(transport.getMetrics().connections.active).toBe(0);
+				expect(transport.getSessions()).toHaveLength(0);
+				expect(Array.from(transport.getMetrics().clients.values())[0]).toMatchObject({
+					isConnected: false,
+					activeConnections: 0,
+				});
+			} finally {
+				await new Promise<void>((resolve, reject) => {
+					httpServer.close((error) => (error ? reject(error) : resolve()));
+				});
+			}
 		});
 	});
 

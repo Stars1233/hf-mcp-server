@@ -1,4 +1,4 @@
-export interface ProxyAppResourceMapping {
+interface ProxyAppResourceMapping {
 	localUri: string;
 	upstreamUri: string;
 	proxyId: string;

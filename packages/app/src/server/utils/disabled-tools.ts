@@ -9,10 +9,6 @@ export function parseDisabledTools(value: string | undefined = process.env[DISAB
 	);
 }
 
-export function isToolDisabled(name: string, disabledTools = parseDisabledTools()): boolean {
-	return disabledTools.has(name);
-}
-
 export function disabledToolCallName(request: unknown, disabledTools = parseDisabledTools()): string | undefined {
 	const body = request as { method?: unknown; params?: { name?: unknown } } | null;
 	const name = body?.method === 'tools/call' ? body.params?.name : undefined;

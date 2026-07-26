@@ -1,12 +1,10 @@
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { type ServerNotification, type ServerRequest, type Tool } from '@modelcontextprotocol/sdk/types.js';
+import { type Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js';
 import { logger } from './utils/logger.js';
 import { logGradioEvent } from './utils/query-logger.js';
 import { z } from 'zod';
-import type { GradioEndpoint } from './utils/mcp-api-client.js';
 import { spaceInfo } from '@huggingface/hub';
 import { gradioMetrics, getMetricsSafeName } from './utils/gradio-metrics.js';
 import { createGradioToolName } from './utils/gradio-utils.js';
@@ -31,6 +29,13 @@ interface JsonSchema {
 	properties?: Record<string, JsonSchemaProperty>;
 	required?: string[];
 	[key: string]: unknown;
+}
+
+interface GradioEndpoint {
+	name: string;
+	subdomain: string;
+	id?: string;
+	emoji?: string;
 }
 
 // Define type for array format schema
@@ -343,11 +348,8 @@ function createToolHandler(
 		clientInfo?: { name: string; version: string };
 	},
 	options: RegisterRemoteToolsOptions = {}
-): (
-	params: Record<string, unknown>,
-	extra: RequestHandlerExtra<ServerRequest, ServerNotification>
-) => Promise<CallToolResult> {
-	return async (params: Record<string, unknown>, extra) => {
+): (params: Record<string, unknown>) => Promise<CallToolResult> {
+	return async (params: Record<string, unknown>) => {
 		logger.info({ tool: tool.name, params }, 'Calling remote tool');
 
 		// Track metrics for logging
@@ -355,7 +357,6 @@ function createToolHandler(
 		let success = false;
 		let error: string | undefined;
 		let responseSizeBytes: number | undefined;
-		const notificationCount = 0;
 
 		try {
 			// Validate MCP URL
@@ -363,8 +364,7 @@ function createToolHandler(
 				throw new Error('No MCP URL available for tool execution');
 			}
 
-			// Use unified Gradio tool caller for Streamable HTTP connection, MCP call, and progress relay
-			const result = await callGradioTool(connection.mcpUrl, tool.name, params, hfToken, extra);
+			const result = await callGradioTool(connection.mcpUrl, tool.name, params, hfToken);
 
 			// Calculate response size (rough estimate based on JSON serialization)
 			try {
@@ -515,7 +515,6 @@ function createToolHandler(
 				success,
 				error,
 				responseSizeBytes,
-				notificationCount,
 			});
 		}
 	};
