@@ -8,7 +8,6 @@ import { z } from 'zod';
 import { spaceInfo } from '@huggingface/hub';
 import { gradioMetrics, getMetricsSafeName } from './utils/gradio-metrics.js';
 import { createGradioToolName } from './utils/gradio-utils.js';
-import { createAudioPlayerUIResource } from './utils/ui/audio-player.js';
 import { spaceMetadataCache, CACHE_CONFIG } from './utils/gradio-cache.js';
 import { callGradioTool, applyResultPostProcessing, type GradioToolCallOptions } from './utils/gradio-tool-caller.js';
 import { parseDisabledTools } from './utils/disabled-tools.js';
@@ -420,61 +419,6 @@ function createToolHandler(
 				gradioWidgetUri: options.gradioWidgetUri,
 				spaceName: connection.name,
 			};
-
-			// Special handling: if the tool name contains "_mcpui" and it returns a single text URL,
-			// wrap it as an embedded audio player UI resource.
-			try {
-				const hasUiSuffix = tool.name.includes('_mcpui');
-				if (!result.isError && hasUiSuffix && Array.isArray(result.content) && result.content.length === 1) {
-					const item = result.content[0] as unknown as { type?: string; text?: string };
-					const text = typeof item?.text === 'string' ? item.text.trim() : '';
-					const looksLikeUrl = /^https?:\/\//i.test(text);
-
-					if ((item.type === 'text' || !item.type) && looksLikeUrl) {
-						let base64Audio: string | undefined;
-						const url = text;
-
-						try {
-							const { response: resp } = await fetchWithProfile(url, NETWORK_FETCH_PROFILES.externalHttps(), {
-								timeoutMs: 8000,
-							});
-							if (resp.ok) {
-								const buf = Buffer.from(await resp.arrayBuffer());
-								base64Audio = buf.toString('base64');
-							}
-						} catch (e) {
-							logger.debug(
-								{ tool: tool.name, url, error: e instanceof Error ? e.message : String(e) },
-								'Failed to inline audio; falling back to URL source'
-							);
-						}
-
-						const title = `${connection.name || 'MCP UI tool'}`;
-						const uriSafeName = (connection.name || 'audio').replace(/[^a-z0-9-_]+/gi, '-');
-						const uiUri: `ui://${string}` = `ui://huggingface-mcp/${uriSafeName}/${Date.now().toString()}`;
-
-						const uiResource = createAudioPlayerUIResource(uiUri, {
-							title,
-							base64Audio,
-							srcUrl: base64Audio ? undefined : url,
-							mimeType: `audio/wav`,
-						});
-
-						const decoratedResult = {
-							isError: false,
-							content: [result.content[0], uiResource],
-						} as CallToolResult;
-
-						// Apply post-processing to the decorated result
-						return applyResultPostProcessing(decoratedResult, postProcessOptions);
-					}
-				}
-			} catch (e) {
-				logger.debug(
-					{ tool: tool.name, error: e instanceof Error ? e.message : String(e) },
-					'MCP UI transform skipped'
-				);
-			}
 
 			// Apply standard post-processing (image stripping + OpenAI structured content)
 			return applyResultPostProcessing(result, postProcessOptions);

@@ -72,8 +72,7 @@ export async function callGradioTool(
  * - Image content filtering (conditionally)
  * - OpenAI-specific structured content
  *
- * This should be called after any custom transformations (like _mcpui handling)
- * to ensure consistent behavior across all Gradio tools.
+ * This ensures consistent behavior across all Gradio tools.
  */
 export function applyResultPostProcessing(result: CallToolResult, options: GradioToolCallOptions): CallToolResult {
 	// Strip image content if requested
