@@ -423,7 +423,7 @@ Call this tool with:
 
 ## Tips
 
-- The uv-scripts organisation contains examples for common tasks. dataset_search {'author':'uv-scripts'}
+- The uv-scripts organisation contains examples for common tasks. hub_repo_search {"repo_types":["dataset"],"author":"uv-scripts"}
 - Jobs default to non-detached mode (tail logs for up to ${DEFAULT_LOG_WAIT_SECONDS}s or until completion). Set \`detach: true\` to return immediately.
 - Prefer array commands to avoid shell parsing surprises
 - To access private Hub assets, include \`secrets: { "HF_TOKEN": "$HF_TOKEN" }\` (or \`${'${HF_TOKEN}'}\`) to inject your auth token.

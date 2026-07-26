@@ -85,9 +85,7 @@ export function McpMethodsCard() {
 	const filteredMethods = showOnlyPrimaryMcpCalls
 		? processedMethods.filter(
 				(m) =>
-					m.method.startsWith('tools/call') ||
-					m.method.startsWith('prompts/get') ||
-					m.method.startsWith('resources/read'),
+					m.method.startsWith('tools/call') || m.method.startsWith('prompts/') || m.method.startsWith('resources/read')
 			)
 		: processedMethods;
 
@@ -97,7 +95,7 @@ export function McpMethodsCard() {
 		.filter((m) => m.method.startsWith('tools/call'))
 		.reduce((sum, method) => sum + method.count, 0);
 	const promptCalls = processedMethods
-		.filter((m) => m.method.startsWith('prompts/get'))
+		.filter((m) => m.method.startsWith('prompts/'))
 		.reduce((sum, method) => sum + method.count, 0);
 	const resourceReads = processedMethods
 		.filter((m) => m.method.startsWith('resources/read'))
@@ -121,6 +119,8 @@ export function McpMethodsCard() {
 							</>
 						) : method === 'prompts/get' ? (
 							<span className="text-purple-600 dark:text-purple-400">prompts/get</span>
+						) : method === 'prompts/list' ? (
+							<span className="text-purple-600 dark:text-purple-400">prompts/list</span>
 						) : method.startsWith('prompts/get:') ? (
 							<>
 								<span className="text-purple-600 dark:text-purple-400">prompts/get:</span>
@@ -257,7 +257,7 @@ export function McpMethodsCard() {
 										Tool Calls: <span className="font-mono">{toolCalls.toLocaleString()}</span>
 									</div>
 									<div className="text-sm font-medium">
-										Prompt Calls: <span className="font-mono">{promptCalls.toLocaleString()}</span>
+										Prompt Attempts: <span className="font-mono">{promptCalls.toLocaleString()}</span>
 									</div>
 									<div className="text-sm font-medium">
 										Resource Reads: <span className="font-mono">{resourceReads.toLocaleString()}</span>

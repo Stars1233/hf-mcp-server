@@ -11,7 +11,6 @@ import { getMetricsSafeName } from '../utils/gradio-metrics.js';
 import { isGradioTool } from '../utils/gradio-utils.js';
 import { getProxyToolDefinition, type ProxyToolResponseType } from '../utils/proxy-tools-config.js';
 
-const GRADIO_FILES_TOOL_NAME = 'gradio_files';
 const HF_SANDBOX_TOOL_NAME = 'hf_sandbox';
 const HF_SANDBOX_EXEC_TOOL_NAME = 'hf_sandbox_exec';
 
@@ -392,13 +391,6 @@ export abstract class BaseTransport {
 
 		// For tools/call, check if it's a Gradio tool using the dedicated method
 		if (methodName === 'tools/call') {
-			const toolName = body?.params?.name;
-
-			// File listing tools need Gradio setup (for conditional registration) but not streaming.
-			if (toolName === GRADIO_FILES_TOOL_NAME) {
-				return false; // Don't skip Gradio setup
-			}
-
 			// Return true (skip) for non-Gradio tools, false (don't skip) for Gradio tools
 			return !this.isGradioToolCall(requestBody);
 		}

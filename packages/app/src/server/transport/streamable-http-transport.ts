@@ -8,7 +8,6 @@ import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { extractQueryParamsToHeaders } from '../utils/query-params.js';
 import { buildOAuthResourceHeader } from '../utils/oauth-resource.js';
 import { logSystemEvent } from '../utils/query-logger.js';
-import { rewriteLegacySearchToolCallRequest } from '../utils/repo-search-shim.js';
 import { disabledToolCallName, disabledToolMessage } from '../utils/disabled-tools.js';
 
 interface StreamableHttpConnection extends BaseSession<StreamableHTTPServerTransport> {
@@ -169,12 +168,7 @@ export class StreamableHttpTransport extends StatefulTransport<Session> {
 				return;
 			}
 
-			const { rewrittenBody, legacyToolName, rewrittenToolName } = rewriteLegacySearchToolCallRequest(req.body);
-			if (legacyToolName && rewrittenToolName) {
-				logger.info({ legacyToolName, rewrittenToolName }, 'Rewriting legacy tool call');
-			}
-
-			await transport.handleRequest(req, res, rewrittenBody);
+			await transport.handleRequest(req, res, req.body);
 
 			// Track successful method call without timing (stateful mode measures HTTP dispatch time, not MCP processing time)
 			this.metrics.trackMethod(trackingName, undefined, false);
@@ -238,14 +232,19 @@ export class StreamableHttpTransport extends StatefulTransport<Session> {
 		await this.removeSession(sessionId);
 	}
 
-	private async createSession(requestHeaders?: Record<string, string>, req?: Request): Promise<StreamableHTTPServerTransport> {
+	private async createSession(
+		requestHeaders?: Record<string, string>,
+		req?: Request
+	): Promise<StreamableHTTPServerTransport> {
 		// Create server instance using factory with request headers
 		// Note: Auth validation is now done in handlePostRequest before calling this method
 		const result = await this.serverFactory(requestHeaders || null);
 		const server = result.server;
 
 		// Extract IP address and auth token for tracking
-		const ipAddress = req ? this.extractIpAddress(req.headers as Record<string, string | string[] | undefined>, req.ip) : undefined;
+		const ipAddress = req
+			? this.extractIpAddress(req.headers as Record<string, string | string[] | undefined>, req.ip)
+			: undefined;
 		const authToken = requestHeaders?.['authorization']?.replace(/^Bearer\s+/i, '');
 
 		const transport = new StreamableHTTPServerTransport({

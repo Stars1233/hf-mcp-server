@@ -16,26 +16,14 @@ import type { TransportInfo } from '../shared/transport-info.js';
 import { GRADIO_IMAGE_FILTER_FLAG, README_INCLUDE_FLAG } from '../shared/behavior-flags.js';
 import { normalizeBuiltInTools } from '../shared/tool-normalizer.js';
 import {
-	SPACE_SEARCH_TOOL_ID,
 	REPO_SEARCH_TOOL_ID,
 	CREATE_REPO_TOOL_ID,
-	PAPER_SEARCH_TOOL_ID,
-	DUPLICATE_SPACE_TOOL_ID,
-	SPACE_FILES_TOOL_ID,
-	DOCS_SEMANTIC_SEARCH_TOOL_ID,
-	DOC_FETCH_TOOL_ID,
 	HUB_REPO_DETAILS_TOOL_ID,
 	HF_FS_TOOL_ID,
-	SEMANTIC_SEARCH_TOOL_CONFIG,
 	REPO_SEARCH_TOOL_CONFIG,
 	CREATE_REPO_TOOL_CONFIG,
-	PAPER_SEARCH_TOOL_CONFIG,
 	HUB_REPO_DETAILS_TOOL_CONFIG,
 	HF_FS_TOOL_CONFIG,
-	DUPLICATE_SPACE_TOOL_CONFIG,
-	SPACE_FILES_TOOL_CONFIG,
-	DOCS_SEMANTIC_SEARCH_CONFIG,
-	DOC_FETCH_CONFIG,
 } from '@llmindset/hf-mcp';
 
 type SpaceTool = {
@@ -237,19 +225,6 @@ function App() {
 
 	/** should we use annotations / Title here? */
 	const searchTools = {
-		paper_search: {
-			id: PAPER_SEARCH_TOOL_ID,
-			label: PAPER_SEARCH_TOOL_CONFIG.annotations.title,
-			description: PAPER_SEARCH_TOOL_CONFIG.description,
-			settings: { enabled: settings?.builtInTools?.includes(PAPER_SEARCH_TOOL_ID) ?? true },
-		},
-		space_search: {
-			id: SPACE_SEARCH_TOOL_ID,
-			label: SEMANTIC_SEARCH_TOOL_CONFIG.annotations.title,
-			description: SEMANTIC_SEARCH_TOOL_CONFIG.description,
-			settings: { enabled: settings?.builtInTools?.includes(SPACE_SEARCH_TOOL_ID) ?? true },
-		},
-
 		hub_repo_search: {
 			id: REPO_SEARCH_TOOL_ID,
 			label: REPO_SEARCH_TOOL_CONFIG.annotations.title,
@@ -283,34 +258,9 @@ function App() {
 				'Allows hub_repo_details to attach README content when the tool request explicitly opts in. Requires reconnect to take effect.',
 			settings: { enabled: readmeFlagEnabled },
 		},
-		doc_semantic_search: {
-			id: DOCS_SEMANTIC_SEARCH_TOOL_ID,
-			label: DOCS_SEMANTIC_SEARCH_CONFIG.annotations.title,
-			description: DOCS_SEMANTIC_SEARCH_CONFIG.description,
-			settings: { enabled: settings?.builtInTools?.includes(DOCS_SEMANTIC_SEARCH_TOOL_ID) ?? true },
-		},
-		doc_fetch: {
-			id: DOC_FETCH_TOOL_ID,
-			label: DOC_FETCH_CONFIG.annotations.title,
-			description: DOC_FETCH_CONFIG.description,
-			settings: { enabled: settings?.builtInTools?.includes(DOC_FETCH_TOOL_ID) ?? true },
-		},
 	};
 
 	const spaceTools = {
-		duplicate_space: {
-			id: DUPLICATE_SPACE_TOOL_ID,
-			label: DUPLICATE_SPACE_TOOL_CONFIG.annotations.title,
-			description: DUPLICATE_SPACE_TOOL_CONFIG.description || 'Duplicate a Hugging Face Space to your account.',
-			settings: { enabled: settings?.builtInTools?.includes(DUPLICATE_SPACE_TOOL_ID) ?? true },
-		},
-		space_files: {
-			id: SPACE_FILES_TOOL_ID,
-			label: SPACE_FILES_TOOL_CONFIG.annotations.title,
-			description:
-				SPACE_FILES_TOOL_CONFIG.description || 'List all files in a static Hugging Face Space with download URLs.',
-			settings: { enabled: settings?.builtInTools?.includes(SPACE_FILES_TOOL_ID) ?? true },
-		},
 		no_gradio_images: {
 			id: GRADIO_IMAGE_FILTER_FLAG,
 			label: 'Disable Gradio Images (flag)',

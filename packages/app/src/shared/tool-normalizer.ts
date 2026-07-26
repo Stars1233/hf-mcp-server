@@ -1,31 +1,14 @@
-import {
-	HF_FILES_FLAG,
-	HF_FS_TOOL_ID,
-	HF_NAV_TOOL_ID,
-	HUB_REPO_DETAILS_TOOL_ID,
-	MODEL_DETAIL_TOOL_ID,
-	DATASET_DETAIL_TOOL_ID,
-	DOC_FETCH_TOOL_ID,
-	DOCS_SEMANTIC_SEARCH_TOOL_ID,
-} from '@llmindset/hf-mcp';
-import { mapLegacySearchToolId } from './repo-search-migration.js';
+import { HF_FILES_FLAG, HF_FS_TOOL_ID, HF_NAV_TOOL_ID } from '@llmindset/hf-mcp';
 
 const HUB_QUERY_FLAGS = new Set(['hf_hub_query', 'hub_query']);
-const LEGACY_DOC_TOOL_IDS = new Set<string>([DOCS_SEMANTIC_SEARCH_TOOL_ID, DOC_FETCH_TOOL_ID]);
-
-export function withoutLegacyDocTools(ids: readonly string[]): string[] {
-	return ids.filter((id) => !LEGACY_DOC_TOOL_IDS.has(id));
-}
 
 /**
  * Normalizes built-in tool lists coming from UI/API clients.
  * - Deduplicates entries while preserving original order where possible.
- * - Replaces legacy detail tools with the newer hub aggregate tool.
  */
 export function normalizeBuiltInTools(ids: readonly string[]): string[] {
 	const seen = new Set<string>();
 	const normalized: string[] = [];
-	let addHubInspect = false;
 
 	for (const rawId of ids) {
 		if (rawId === HF_FILES_FLAG) {
@@ -48,23 +31,12 @@ export function normalizeBuiltInTools(ids: readonly string[]): string[] {
 			continue;
 		}
 
-		const normalizedToolId = mapLegacySearchToolId(rawId);
-		const canonicalToolId = normalizedToolId === HF_NAV_TOOL_ID ? HF_FS_TOOL_ID : normalizedToolId;
-
-		if (canonicalToolId === MODEL_DETAIL_TOOL_ID || canonicalToolId === DATASET_DETAIL_TOOL_ID) {
-			addHubInspect = true;
-			continue;
-		}
+		const canonicalToolId = rawId === HF_NAV_TOOL_ID ? HF_FS_TOOL_ID : rawId;
 
 		if (!seen.has(canonicalToolId)) {
 			seen.add(canonicalToolId);
 			normalized.push(canonicalToolId);
 		}
-	}
-
-	if (addHubInspect && !seen.has(HUB_REPO_DETAILS_TOOL_ID)) {
-		seen.add(HUB_REPO_DETAILS_TOOL_ID);
-		normalized.push(HUB_REPO_DETAILS_TOOL_ID);
 	}
 
 	return normalized;

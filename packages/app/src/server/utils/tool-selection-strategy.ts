@@ -3,7 +3,7 @@ import type { AppSettings, SpaceTool } from '../../shared/settings.js';
 import { ALL_BUILTIN_TOOL_IDS, HF_FS_TOOL_ID, HUB_REPO_DETAILS_TOOL_ID, REPO_SEARCH_TOOL_ID } from '@llmindset/hf-mcp';
 import type { McpApiClient } from './mcp-api-client.js';
 import { extractAuthBouquetAndMix } from '../utils/auth-utils.js';
-import { normalizeBuiltInTools, withoutLegacyDocTools } from '../../shared/tool-normalizer.js';
+import { normalizeBuiltInTools } from '../../shared/tool-normalizer.js';
 import { BOUQUETS } from '../../shared/bouquet-presets.js';
 import { parseGradioSpaceIds } from './gradio-utils.js';
 import { getProxyToolsConfig } from './proxy-tools-config.js';
@@ -111,20 +111,6 @@ export class ToolSelectionStrategy {
 	}
 
 	/**
-	 * Applies SEARCH_ENABLES_FETCH logic if enabled
-	 * If hf_doc_search is enabled and SEARCH_ENABLES_FETCH=true, also enable hf_doc_fetch
-	 */
-	private applySearchEnablesFetch(enabledToolIds: string[]): string[] {
-		if (process.env.SEARCH_ENABLES_FETCH === 'true') {
-			if (enabledToolIds.includes('hf_doc_search') && !enabledToolIds.includes('hf_doc_fetch')) {
-				logger.debug('SEARCH_ENABLES_FETCH: Auto-enabling hf_doc_fetch because hf_doc_search is enabled');
-				return [...enabledToolIds, 'hf_doc_fetch'];
-			}
-		}
-		return enabledToolIds;
-	}
-
-	/**
 	 * Always ensure sandbox exec and fs are enabled when sandbox management is enabled.
 	 */
 	private applySandboxEnablesExec(enabledToolIds: string[]): string[] {
@@ -144,7 +130,7 @@ export class ToolSelectionStrategy {
 	 */
 	private applyToolDependencies(enabledToolIds: string[]): string[] {
 		const requiredTools = enabledToolIds.includes(HF_FS_TOOL_ID) ? enabledToolIds : [...enabledToolIds, HF_FS_TOOL_ID];
-		return this.applySandboxEnablesExec(this.applySearchEnablesFetch(requiredTools));
+		return this.applySandboxEnablesExec(requiredTools);
 	}
 
 	private getProxyToolNames(): string[] {
@@ -214,9 +200,7 @@ export class ToolSelectionStrategy {
 
 		// 2. Get base user settings
 		const rawBaseSettings = await this.getUserSettings(context);
-		const baseSettings = rawBaseSettings
-			? { ...rawBaseSettings, builtInTools: withoutLegacyDocTools(rawBaseSettings.builtInTools) }
-			: null;
+		const baseSettings = rawBaseSettings;
 
 		// 3. Apply mix if specified and we have base settings
 		if (mixList.length > 0 && baseSettings) {
@@ -301,7 +285,7 @@ export class ToolSelectionStrategy {
 		});
 		const fallbackMixTools = fallbackMixes.flatMap((mixName) => BOUQUETS[mixName]?.builtInTools ?? []);
 		let enabledToolIds = normalizeBuiltInTools(
-			this.applyToolDependencies([...withoutLegacyDocTools(ALL_BUILTIN_TOOL_IDS), ...fallbackMixTools])
+			this.applyToolDependencies([...ALL_BUILTIN_TOOL_IDS, ...fallbackMixTools])
 		);
 		if (includesProxyMix && proxyToolNames.length > 0) {
 			enabledToolIds = this.appendProxyTools(enabledToolIds);

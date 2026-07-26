@@ -60,14 +60,24 @@ describe('StatelessHttpTransport', () => {
 			expect(result).toBe(false);
 		});
 
-		it('should handle prompts/list requests', () => {
+		it('should reject prompts/list through the stub responder', () => {
 			const result = (transport as any).shouldHandle({ method: 'prompts/list' });
-			expect(result).toBe(true);
+			expect(result).toBe(false);
 		});
 
-		it('should handle prompts/get requests', () => {
+		it('should reject prompts/get through the stub responder', () => {
 			const result = (transport as any).shouldHandle({ method: 'prompts/get' });
-			expect(result).toBe(true);
+			expect(result).toBe(false);
+		});
+
+		it('should retain prompt attempt names for metrics', () => {
+			expect((transport as any).extractMethodForTracking({ method: 'prompts/list' })).toBe('prompts/list');
+			expect(
+				(transport as any).extractMethodForTracking({
+					method: 'prompts/get',
+					params: { name: 'Retired Prompt' },
+				})
+			).toBe('prompts/get:Retired Prompt');
 		});
 
 		it('should handle resources/list requests for non-openai-mcp clients', () => {
@@ -117,15 +127,6 @@ describe('StatelessHttpTransport', () => {
 	});
 
 	describe('skipGradioSetup', () => {
-		it('should not skip setup for gradio_files calls because it is registered by the Gradio proxy layer', () => {
-			const result = (transport as any).skipGradioSetup({
-				method: 'tools/call',
-				params: { name: 'gradio_files' },
-			});
-
-			expect(result).toBe(false);
-		});
-
 		it('should not skip setup for Gradio endpoint tool calls', () => {
 			const result = (transport as any).skipGradioSetup({
 				method: 'tools/call',
@@ -174,7 +175,7 @@ describe('StatelessHttpTransport', () => {
 		it('should skip setup for normal local tool calls', () => {
 			const result = (transport as any).skipGradioSetup({
 				method: 'tools/call',
-				params: { name: 'hf_model_search' },
+				params: { name: 'hub_repo_search' },
 			});
 
 			expect(result).toBe(true);
@@ -241,20 +242,18 @@ describe('StatelessHttpTransport', () => {
 		});
 	});
 
-	describe('disabled tools', () => {
-		it('rejects disabled calls before dispatch and records a dashboard error', async () => {
-			process.env.DISABLE_TOOLS = 'model_search';
+	describe('unsupported prompts', () => {
+		it('logs prompts/get attempts without building a prompt-capable server', async () => {
 			const mockServerFactory = vi.fn() as unknown as ServerFactory;
 			transport = new StatelessHttpTransport(mockServerFactory, express());
-
 			const req = {
 				headers: {},
 				query: {},
 				body: {
 					jsonrpc: '2.0',
 					id: 1,
-					method: 'tools/call',
-					params: { name: 'model_search', arguments: { query: 'bert' } },
+					method: 'prompts/get',
+					params: { name: 'Retired Prompt' },
 				},
 				ip: '127.0.0.1',
 			};
@@ -267,14 +266,54 @@ describe('StatelessHttpTransport', () => {
 
 			await (transport as any).handleJsonRpcRequest(req, res);
 
-			const methodMetrics = transport.getMetrics().methods.get('tools/call:model_search');
+			expect(transport.getMetrics().methods.get('prompts/get:Retired Prompt')).toMatchObject({
+				count: 1,
+				errors: 1,
+			});
+			expect(mockServerFactory).not.toHaveBeenCalled();
+			expect(res.status).toHaveBeenCalledWith(200);
+			expect(res.json).toHaveBeenCalledWith(
+				expect.objectContaining({
+					error: expect.objectContaining({ message: 'prompts/get is not supported' }),
+				})
+			);
+		});
+	});
+
+	describe('disabled tools', () => {
+		it('rejects disabled calls before dispatch and records a dashboard error', async () => {
+			process.env.DISABLE_TOOLS = 'hub_repo_search';
+			const mockServerFactory = vi.fn() as unknown as ServerFactory;
+			transport = new StatelessHttpTransport(mockServerFactory, express());
+
+			const req = {
+				headers: {},
+				query: {},
+				body: {
+					jsonrpc: '2.0',
+					id: 1,
+					method: 'tools/call',
+					params: { name: 'hub_repo_search', arguments: { query: 'bert' } },
+				},
+				ip: '127.0.0.1',
+			};
+			const res = {
+				set: vi.fn().mockReturnThis(),
+				status: vi.fn().mockReturnThis(),
+				json: vi.fn().mockReturnThis(),
+				send: vi.fn().mockReturnThis(),
+			};
+
+			await (transport as any).handleJsonRpcRequest(req, res);
+
+			const methodMetrics = transport.getMetrics().methods.get('tools/call:hub_repo_search');
 			expect(methodMetrics).toMatchObject({ count: 1, errors: 1 });
 			expect(mockServerFactory).not.toHaveBeenCalled();
 			expect(res.status).toHaveBeenCalledWith(200);
 			expect(res.json).toHaveBeenCalledWith(
 				expect.objectContaining({
 					error: expect.objectContaining({
-						message: 'Invalid params: Tool model_search is disabled by server configuration',
+						message: 'Invalid params: Tool hub_repo_search is disabled by server configuration',
 					}),
 				})
 			);

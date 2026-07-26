@@ -240,21 +240,9 @@ function logQueryEvent(
 }
 
 /**
- * Simple helper to log successful search queries
+ * Log an MCP tool operation.
  */
-export function logSearchQuery(
-	methodName: string,
-	query: string,
-	data: Record<string, unknown>,
-	options?: QueryLoggerOptions
-): void {
-	logQueryEvent(methodName, query, data, options);
-}
-
-/**
- * Simple helper to log prompts (model details, dataset details, user/paper summaries)
- */
-export function logPromptQuery(
+export function logToolQuery(
 	methodName: string,
 	query: string,
 	data: Record<string, unknown>,

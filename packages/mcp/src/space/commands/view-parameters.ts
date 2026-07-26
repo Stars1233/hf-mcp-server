@@ -58,7 +58,7 @@ export async function viewParameters(spaceName: string, hfToken?: string): Promi
 
 		if (is404) {
 			formattedError +=
-				'\n\nNote: The space MUST be an MCP enabled space. Use the `space_search` tool to find MCP enabled spaces.';
+				'\n\nNote: The space MUST be an MCP enabled space. Use `hub_repo_search` with `repo_types: ["space"]` to find Spaces.';
 		}
 
 		return {

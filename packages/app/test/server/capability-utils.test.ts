@@ -23,6 +23,7 @@ describe('registerCapabilities', () => {
 		const { server, getCaps } = makeServer();
 		registerCapabilities(server, apiClient, { hasSkills: true });
 		const caps = getCaps();
+		expect(caps.prompts).toBeUndefined();
 		expect(caps.resources).toEqual({ subscribe: false, listChanged: false });
 		expect(caps.extensions).toEqual({ 'io.modelcontextprotocol/skills': { directoryRead: true } });
 	});
@@ -31,6 +32,7 @@ describe('registerCapabilities', () => {
 		const { server, getCaps } = makeServer();
 		registerCapabilities(server, apiClient, { hasSkills: false, hasResources: false });
 		const caps = getCaps();
+		expect(caps.prompts).toBeUndefined();
 		expect(caps.resources).toBeUndefined();
 		expect(caps.extensions).toBeUndefined();
 	});

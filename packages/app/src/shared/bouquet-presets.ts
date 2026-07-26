@@ -3,12 +3,10 @@ import {
 	TOOL_ID_GROUPS,
 	HUB_REPO_DETAILS_TOOL_ID,
 	HF_FS_TOOL_ID,
-	USE_SPACE_TOOL_ID,
 	HF_JOBS_TOOL_ID,
 	DYNAMIC_SPACE_TOOL_ID,
 	REPO_SEARCH_TOOL_ID,
 	CREATE_REPO_TOOL_ID,
-	DOCS_SEMANTIC_SEARCH_TOOL_ID,
 	HF_FILES_FLAG,
 } from '@llmindset/hf-mcp';
 import type { AppSettings } from './settings.js';
@@ -36,13 +34,7 @@ export const BOUQUETS: Record<string, AppSettings> = {
 		spaceTools: [],
 	},
 	skills: {
-		builtInTools: [
-			HUB_REPO_DETAILS_TOOL_ID,
-			README_INCLUDE_FLAG,
-			REPO_SEARCH_TOOL_ID,
-			DOCS_SEMANTIC_SEARCH_TOOL_ID,
-			HF_JOBS_TOOL_ID,
-		],
+		builtInTools: [HUB_REPO_DETAILS_TOOL_ID, README_INCLUDE_FLAG, REPO_SEARCH_TOOL_ID, HF_FS_TOOL_ID, HF_JOBS_TOOL_ID],
 		spaceTools: [],
 	},
 	research: {
@@ -64,10 +56,6 @@ export const BOUQUETS: Record<string, AppSettings> = {
 	},
 	no_gradio_images: {
 		builtInTools: [GRADIO_IMAGE_FILTER_FLAG],
-		spaceTools: [],
-	},
-	mcp_ui: {
-		builtInTools: [USE_SPACE_TOOL_ID],
 		spaceTools: [],
 	},
 	jobs: {
@@ -141,7 +129,7 @@ const PRESET_META: Array<Omit<BouquetPreset, 'builtInTools'>> = [
 	{
 		key: 'search',
 		label: 'Search Tools',
-		description: 'Search across models, datasets, spaces, papers, and docs.',
+		description: 'Search across models, datasets, and Spaces.',
 		category: 'core',
 		supportsBouquet: true,
 		supportsMix: true,
@@ -211,15 +199,6 @@ const PRESET_META: Array<Omit<BouquetPreset, 'builtInTools'>> = [
 		],
 	},
 	{
-		key: 'mcp_ui',
-		label: 'MCP UI Preview',
-		description:
-			"Enable the MCP UI 'use_space' tool (Use with an MCP-UI client - see https://mcpui.dev/guide/supported-hosts).",
-		category: 'advanced',
-		supportsBouquet: true,
-		supportsMix: true,
-	},
-	{
 		key: 'jobs',
 		label: 'Run and Manage Jobs',
 		description: 'Run, monitor and schedule jobs on Hugging Face infrastructure.',
@@ -272,10 +251,6 @@ interface ConfigEntryDescription {
 }
 
 const TOOL_DESCRIPTIONS: Record<string, Omit<ConfigEntryDescription, 'id' | 'kind'>> = {
-	space_search: {
-		label: 'Space Search',
-		description: 'Semantic search across public Spaces on the Hugging Face Hub.',
-	},
 	hub_repo_search: {
 		label: 'Repo Search',
 		description: 'Search models, datasets, and optional spaces with one shared query.',
@@ -284,45 +259,9 @@ const TOOL_DESCRIPTIONS: Record<string, Omit<ConfigEntryDescription, 'id' | 'kin
 		label: 'Create Repo',
 		description: 'Create or duplicate model, dataset, bucket, or space repositories with hf:// URIs.',
 	},
-	model_details: {
-		label: 'Model Details',
-		description: 'Retrieve detailed metadata for a specific model repository.',
-	},
-	paper_search: {
-		label: 'Paper Search',
-		description: 'Discover research papers relevant to your query.',
-	},
-	dataset_details: {
-		label: 'Dataset Details',
-		description: 'Inspect dataset metadata and card information.',
-	},
-	duplicate_space: {
-		label: 'Duplicate Space',
-		description: 'Clone a Space into your namespace for customization.',
-	},
-	space_info: {
-		label: 'Space Info',
-		description: 'List Spaces for a username or organization.',
-	},
-	space_files: {
-		label: 'Space Files',
-		description: 'Browse the file structure of a Space repository.',
-	},
 	hf_fs: {
 		label: 'HF Filesystem',
 		description: 'Browse, search, and read Hub resources and documentation.',
-	},
-	use_space: {
-		label: 'Use Space',
-		description: 'Launch or interact with a Space through the MCP UI.',
-	},
-	hf_doc_search: {
-		label: 'Docs Search',
-		description: 'Search the Hugging Face documentation site.',
-	},
-	hf_doc_fetch: {
-		label: 'Docs Fetch',
-		description: 'Retrieve full documentation pages for follow-up analysis.',
 	},
 	hub_repo_details: {
 		label: 'Hub Repo Details',

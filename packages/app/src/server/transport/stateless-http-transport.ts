@@ -18,7 +18,6 @@ import { isBrowser } from '../utils/browser-detection.js';
 import { buildOAuthResourceHeader } from '../utils/oauth-resource.js';
 import { randomUUID } from 'node:crypto';
 import { logSystemEvent } from '../utils/query-logger.js';
-import { rewriteLegacySearchToolCallRequest } from '../utils/repo-search-shim.js';
 import { disabledToolCallName, disabledToolMessage } from '../utils/disabled-tools.js';
 import { isClientDenied } from '../../shared/client-denylist.js';
 import { getSkillCatalog } from '../skills/skill-catalog-cache.js';
@@ -39,6 +38,7 @@ const RESOURCE_METHODS = new Set([
 // Resource-subscription methods we never support (skills are static — nothing to
 // notify `resources/updated` about). Rejected cheaply before any server is built.
 const UNSUPPORTED_SUBSCRIBE_METHODS = new Set(['resources/subscribe', 'resources/unsubscribe']);
+const UNSUPPORTED_PROMPT_METHODS = new Set(['prompts/list', 'prompts/get']);
 
 interface JsonRpcRequestBody {
 	method?: string;
@@ -98,8 +98,6 @@ export class StatelessHttpTransport extends BaseTransport {
 		const methodsRequiringFullServer = new Set([
 			'tools/list',
 			'tools/call',
-			'prompts/list',
-			'prompts/get',
 			'initialize',
 			'resources/list',
 			'resources/read',
@@ -305,9 +303,21 @@ export class StatelessHttpTransport extends BaseTransport {
 		}
 
 		const authResult = await this.validateAuthAndTrackMetrics(headers);
-		if (!authResult.shouldContinue || trackingName === 'tools/call:Authenticate') {
+		if (!authResult.shouldContinue) {
 			res.set('WWW-Authenticate', buildOAuthResourceHeader(req));
 			res.status(authResult.statusCode || 401).send('Unauthorized');
+			return;
+		}
+
+		if (rpcMethod && UNSUPPORTED_PROMPT_METHODS.has(rpcMethod)) {
+			const promptSessionId = headers['mcp-session-id'];
+			const clientInfo =
+				this.extractClientInfoFromRequest(requestBody) ??
+				(typeof promptSessionId === 'string'
+					? this.analyticsSessions.get(promptSessionId)?.metadata.clientInfo
+					: undefined);
+			this.trackMethodCall(trackingName, startTime, true, clientInfo);
+			res.status(200).json(JsonRpcErrors.methodNotFound(extractJsonRpcId(req.body), `${rpcMethod} is not supported`));
 			return;
 		}
 
@@ -320,9 +330,7 @@ export class StatelessHttpTransport extends BaseTransport {
 					? this.analyticsSessions.get(disabledSessionId)?.metadata.clientInfo
 					: undefined);
 			this.trackMethodCall(trackingName, startTime, true, clientInfo);
-			res
-				.status(200)
-				.json(JsonRpcErrors.invalidParams(disabledToolMessage(disabledTool), extractJsonRpcId(req.body)));
+			res.status(200).json(JsonRpcErrors.invalidParams(disabledToolMessage(disabledTool), extractJsonRpcId(req.body)));
 			return;
 		}
 
@@ -526,12 +534,7 @@ export class StatelessHttpTransport extends BaseTransport {
 			// Connect and handle
 			await server.connect(transport);
 
-			const { rewrittenBody, legacyToolName, rewrittenToolName } = rewriteLegacySearchToolCallRequest(req.body);
-			if (legacyToolName && rewrittenToolName) {
-				logger.info({ legacyToolName, rewrittenToolName }, 'Rewriting legacy tool call');
-			}
-
-			await transport.handleRequest(req, res, rewrittenBody);
+			await transport.handleRequest(req, res, req.body);
 
 			// Track successful method call with client info
 			this.trackMethodCall(trackingName, startTime, false, clientInfo);

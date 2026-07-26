@@ -24,7 +24,6 @@ export const REPO_SEARCH_TOOL_CONFIG = {
 	description:
 		'Search Hugging Face repositories with a shared query interface. ' +
 		'You can target models, datasets, spaces, or aggregate across multiple repo types in one call. ' +
-		'Use space_search for semantic-first discovery of Spaces. ' +
 		'Include links to repositories in your response.',
 	schema: z.object({
 		query: z
