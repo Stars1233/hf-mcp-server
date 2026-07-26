@@ -53,16 +53,6 @@ gemini mcp add -t http huggingface https://huggingface.co/mcp?login
 
 Then start `gemini` and follow the instructions to complete authentication.
 
-There is also a HuggingFace Gemini CLI extension that bundles the MCP server
-with a context file and custom commands, teaching Gemini how to better use
-all MCP tools.
-
-```bash
-gemini extensions install https://github.com/huggingface/hf-mcp-server
-```
-
-Start `gemini` and run `/mcp auth huggingface` to authenticate the extension.
-
 </details>
 
 <details>
