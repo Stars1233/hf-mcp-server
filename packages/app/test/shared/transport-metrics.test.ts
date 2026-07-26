@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
 	formatMetricsForAPI,
 	hashUserIdentity,
@@ -15,6 +15,27 @@ describe('isInitializeRequest', () => {
 });
 
 describe('MetricsCounter', () => {
+	it('uses actual uptime for rolling throughput before a window is full', () => {
+		vi.useFakeTimers();
+		try {
+			vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+			const metrics = new MetricsCounter();
+			for (let request = 0; request < 30; request++) {
+				metrics.trackRequest();
+			}
+
+			vi.advanceTimersByTime(30 * 60 * 1000);
+			const requests = metrics.getMetrics().requests;
+
+			expect(requests.lastMinute).toBe(0);
+			expect(requests.lastHour).toBe(1);
+			expect(requests.last3Hours).toBe(1);
+			expect(requests.averagePerMinute).toBe(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it('tracks legacy and modern protocol requests independently', () => {
 		const metrics = new MetricsCounter();
 

@@ -249,9 +249,9 @@ export function StatelessTransportMetrics({ metrics }: StatelessTransportMetrics
 					tone={totalErrors > 0 ? 'red' : 'neutral'}
 				/>
 				<MetricTile
-					label="Throughput"
+					label="Throughput · 1h"
 					value={`${metrics.requests.lastHour}/min`}
-					detail={`${metrics.requests.last3Hours}/min over 3 hours`}
+					detail={`3h ${metrics.requests.last3Hours}/min · lifetime ${metrics.requests.averagePerMinute}/min`}
 					icon={<Activity className="size-5" />}
 					tone="blue"
 				/>

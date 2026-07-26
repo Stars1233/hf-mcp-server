@@ -515,17 +515,7 @@ export class MetricsCounter {
 	 * Get the underlying metrics data
 	 */
 	getMetrics(): TransportMetrics {
-		// Calculate rates (requests per minute) for each window
-		// Note: All values represent "requests per minute" calculated over their respective windows
-		this.metrics.requests.lastMinute = this.rollingMinute.getCount(); // Requests in last 1 minute (already per minute)
-
-		// For longer windows, divide total count by window size to get per-minute rate
-		const hourCount = this.rollingHour.getCount();
-		const threeHourCount = this.rolling3Hours.getCount();
-
-		// Calculate per-minute rates for the longer windows
-		this.metrics.requests.lastHour = Math.round((hourCount / 60) * 100) / 100; // Requests per minute over last hour
-		this.metrics.requests.last3Hours = Math.round((threeHourCount / 180) * 100) / 100; // Requests per minute over last 3 hours
+		this.updateRequestRates();
 
 		// Update unique IPs count
 		this.metrics.connections.uniqueIps = this.uniqueIps.size;
@@ -539,24 +529,13 @@ export class MetricsCounter {
 	 */
 	trackRequest(): void {
 		this.metrics.requests.total++;
-		this.updateRequestsPerMinute();
 
 		// Update rolling window counters
 		this.rollingMinute.increment();
 		this.rollingHour.increment();
 		this.rolling3Hours.increment();
 
-		// Calculate rates (requests per minute) for each window
-		// Note: All values represent "requests per minute" calculated over their respective windows
-		this.metrics.requests.lastMinute = this.rollingMinute.getCount(); // Requests in last 1 minute (already per minute)
-
-		// For longer windows, divide total count by window size to get per-minute rate
-		const hourCount = this.rollingHour.getCount();
-		const threeHourCount = this.rolling3Hours.getCount();
-
-		// Calculate per-minute rates for the longer windows
-		this.metrics.requests.lastHour = Math.round((hourCount / 60) * 100) / 100; // Requests per minute over last hour
-		this.metrics.requests.last3Hours = Math.round((threeHourCount / 180) * 100) / 100; // Requests per minute over last 3 hours
+		this.updateRequestRates();
 	}
 
 	/**
@@ -1012,14 +991,19 @@ export class MetricsCounter {
 	}
 
 	/**
-	 * Update requests per minute calculation
+	 * Update request rates using only the portion of each window for which the
+	 * current process has actually been running. A server with 30 minutes of
+	 * uptime must not dilute its one-hour and three-hour rates over 60 or 180
+	 * minutes. Rates are recalculated when read so lifetime throughput decays
+	 * correctly during idle periods.
 	 */
-	private updateRequestsPerMinute(): void {
-		const now = Date.now();
-		const startupTime = this.metrics.startupTime.getTime();
-		const uptimeMinutes = (now - startupTime) / (1000 * 60);
+	private updateRequestRates(): void {
+		const uptimeMinutes = Math.max((Date.now() - this.metrics.startupTime.getTime()) / 60000, 1);
+		const roundRate = (count: number, minutes: number): number => Math.round((count / minutes) * 100) / 100;
 
-		this.metrics.requests.averagePerMinute =
-			uptimeMinutes > 0 ? Math.round((this.metrics.requests.total / uptimeMinutes) * 100) / 100 : 0;
+		this.metrics.requests.lastMinute = this.rollingMinute.getCount();
+		this.metrics.requests.lastHour = roundRate(this.rollingHour.getCount(), Math.min(uptimeMinutes, 60));
+		this.metrics.requests.last3Hours = roundRate(this.rolling3Hours.getCount(), Math.min(uptimeMinutes, 180));
+		this.metrics.requests.averagePerMinute = roundRate(this.metrics.requests.total, uptimeMinutes);
 	}
 }
