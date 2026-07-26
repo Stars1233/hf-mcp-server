@@ -9,6 +9,7 @@ import type { ServerFactory } from '../../../src/server/transport/base-transport
 import { formatMetricsForAPI } from '../../../src/shared/transport-metrics.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import express from 'express';
+import { createProgressRelay } from '../../../src/server/utils/progress-relay.js';
 
 describe('MetricsResponseCapture', () => {
 	it('detects JSON-RPC and tool errors in bounded responses', () => {
@@ -18,8 +19,21 @@ describe('MetricsResponseCapture', () => {
 		expect(rpcError.isError()).toBe(true);
 
 		const toolError = new MetricsResponseCapture();
-		toolError.add(Buffer.from('{"jsonrpc":"2.0","id":1,"result":{"content":[],"isError":true}}'));
+		toolError.add(
+			Buffer.from(
+				'{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"contains data: text"}],"isError":true}}'
+			)
+		);
 		expect(toolError.isError()).toBe(true);
+
+		const sseToolError = new MetricsResponseCapture();
+		sseToolError.add(
+			'event: message\n' +
+				'data: {"jsonrpc":"2.0","method":"notifications/progress","params":{"progressToken":"token","progress":1}}\n\n' +
+				'event: message\n' +
+				'data: {"jsonrpc":"2.0","id":1,"result":{"content":[],"isError":true}}\n\n'
+		);
+		expect(sseToolError.isError()).toBe(true);
 	});
 
 	it('does not concatenate or parse responses larger than the capture limit', () => {
@@ -250,10 +264,21 @@ describe('StatelessHttpTransport', () => {
 			process.env.ANALYTICS_MODE = 'true';
 			const app = express();
 			app.use(express.json());
-			const serverFactory = vi.fn(async () => ({
-				server: new McpServer({ name: 'stateless-test', version: '1.0.0' }),
-				enabledToolIds: [],
-			}));
+			const serverFactory = vi.fn(async () => {
+				const server = new McpServer({ name: 'stateless-test', version: '1.0.0' });
+				server.registerTool(
+					'progress_test',
+					{
+						description: 'Emits progress for transport testing.',
+						inputSchema: {},
+					},
+					async (_params, extra) => {
+						await createProgressRelay(extra)?.({ progress: 1, total: 2, message: 'Halfway' });
+						return { content: [{ type: 'text', text: 'done' }] };
+					}
+				);
+				return { server, enabledToolIds: [] };
+			});
 			transport = new StatelessHttpTransport(serverFactory, app);
 			await transport.initialize();
 
@@ -318,7 +343,7 @@ describe('StatelessHttpTransport', () => {
 				);
 				expect(dashboardMetrics.sessions).toHaveLength(1);
 
-				const unknownToolResponse = await fetch(`http://127.0.0.1:${address.port}/mcp`, {
+				const progressResponse = await fetch(`http://127.0.0.1:${address.port}/mcp`, {
 					method: 'POST',
 					headers: {
 						accept: 'application/json, text/event-stream',
@@ -329,11 +354,63 @@ describe('StatelessHttpTransport', () => {
 						jsonrpc: '2.0',
 						id: 2,
 						method: 'tools/call',
+						params: {
+							name: 'progress_test',
+							arguments: {},
+							_meta: { progressToken: 'test-token' },
+						},
+					}),
+				});
+				expect(progressResponse.status).toBe(200);
+				expect(progressResponse.headers.get('content-type')).toContain('text/event-stream');
+				const progressBody = await progressResponse.text();
+				expect(progressBody).toContain('"method":"notifications/progress"');
+				expect(progressBody).toContain('"progressToken":"test-token"');
+				expect(progressBody).toContain('"message":"Halfway"');
+				expect(progressBody).toContain('"result":{"content":[{"type":"text","text":"done"}]}');
+
+				const jsonToolResponse = await fetch(`http://127.0.0.1:${address.port}/mcp`, {
+					method: 'POST',
+					headers: {
+						accept: 'application/json, text/event-stream',
+						'content-type': 'application/json',
+						'mcp-session-id': sessionId ?? '',
+					},
+					body: JSON.stringify({
+						jsonrpc: '2.0',
+						id: 3,
+						method: 'tools/call',
+						params: { name: 'progress_test', arguments: {} },
+					}),
+				});
+				expect(jsonToolResponse.status).toBe(200);
+				expect(jsonToolResponse.headers.get('content-type')).toContain('application/json');
+				expect(await jsonToolResponse.json()).toMatchObject({
+					result: { content: [{ type: 'text', text: 'done' }] },
+				});
+				expect(transport.getMetrics().methods.get('tools/call:progress_test')).toMatchObject({
+					count: 2,
+					errors: 0,
+				});
+
+				const unknownToolResponse = await fetch(`http://127.0.0.1:${address.port}/mcp`, {
+					method: 'POST',
+					headers: {
+						accept: 'application/json, text/event-stream',
+						'content-type': 'application/json',
+						'mcp-session-id': sessionId ?? '',
+					},
+					body: JSON.stringify({
+						jsonrpc: '2.0',
+						id: 4,
+						method: 'tools/call',
 						params: { name: 'missing_tool', arguments: {} },
 					}),
 				});
 				expect(unknownToolResponse.status).toBe(200);
-				expect(await unknownToolResponse.json()).toMatchObject({ error: expect.any(Object) });
+				expect(await unknownToolResponse.json()).toMatchObject({
+					result: { isError: true, content: expect.any(Array) },
+				});
 				expect(transport.getMetrics().methods.get('tools/call:missing_tool')).toMatchObject({
 					count: 1,
 					errors: 1,

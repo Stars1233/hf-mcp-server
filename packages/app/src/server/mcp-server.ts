@@ -56,6 +56,7 @@ import { isClientDenied } from '../shared/client-denylist.js';
 import { getSkillCatalog } from './skills/skill-catalog-cache.js';
 import { SERVER_VERSION } from './server-build-info.js';
 import { parseDisabledTools } from './utils/disabled-tools.js';
+import { createProgressRelay } from './utils/progress-relay.js';
 
 // Bouquet configurations moved to tool-selection-strategy.ts
 
@@ -552,8 +553,9 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 					outputSchema: sandboxToolConfig.outputSchema.shape,
 					annotations: sandboxToolConfig.annotations,
 				},
-				async (params: HfSandboxParams) => {
+				async (params: HfSandboxParams, extra) => {
 					const isAuthenticated = !!hfToken;
+					const onProgress = createProgressRelay(extra);
 					const result = await runWithQueryLogging(
 						logToolQuery,
 						{
@@ -569,7 +571,7 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 						},
 						async () => {
 							const sandboxTool = new HfSandboxTool(hfToken, isAuthenticated, username);
-							return sandboxTool.run(params);
+							return sandboxTool.run(params, { onProgress });
 						}
 					);
 
@@ -592,8 +594,9 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 					outputSchema: sandboxExecToolConfig.outputSchema.shape,
 					annotations: sandboxExecToolConfig.annotations,
 				},
-				async (params: HfSandboxExecParams) => {
+				async (params: HfSandboxExecParams, extra) => {
 					const isAuthenticated = !!hfToken;
+					const onProgress = createProgressRelay(extra);
 					const result = await runWithQueryLogging(
 						logToolQuery,
 						{
@@ -609,7 +612,7 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 						},
 						async () => {
 							const sandboxExecTool = new HfSandboxExecTool(hfToken, isAuthenticated, username);
-							return sandboxExecTool.run(params);
+							return sandboxExecTool.run(params, { onProgress });
 						}
 					);
 
@@ -672,7 +675,7 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 					inputSchema: dynamicSpaceToolConfig.schema.shape,
 					annotations: dynamicSpaceToolConfig.annotations,
 				},
-				async (params: SpaceArgs) => {
+				async (params: SpaceArgs, extra) => {
 					// Check if invoke operation is disabled by gradio=none
 					const { gradio } = extractAuthBouquetAndMix(headers);
 					if (params.operation === 'invoke' && gradio === 'none') {
@@ -693,7 +696,9 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 
 						try {
 							const spaceTool = new SpaceTool(hfToken);
-							const result = await spaceTool.execute(params);
+							const result = await spaceTool.execute(params, {
+								onProgress: createProgressRelay(extra),
+							});
 
 							if ('result' in result && result.result) {
 								const invokeResult = result as InvokeResult;

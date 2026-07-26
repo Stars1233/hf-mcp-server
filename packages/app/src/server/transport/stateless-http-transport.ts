@@ -49,14 +49,25 @@ interface JsonRpcRequestBody {
 }
 
 function isErrorResponseBody(body: string): boolean {
-	try {
-		const parsed = JSON.parse(body) as
-			{ error?: unknown; result?: { isError?: unknown } } | { error?: unknown; result?: { isError?: unknown } }[];
-		const responses = Array.isArray(parsed) ? parsed : [parsed];
-		return responses.some((response) => response.error !== undefined || response.result?.isError === true);
-	} catch {
-		return false;
+	const ssePayloads = body
+		.split(/\r?\n/u)
+		.filter((line) => line.startsWith('data:'))
+		.map((line) => line.slice(5).trim());
+	const payloads = ssePayloads.length > 0 ? ssePayloads : [body];
+
+	for (const payload of payloads) {
+		try {
+			const parsed = JSON.parse(payload) as
+				{ error?: unknown; result?: { isError?: unknown } } | { error?: unknown; result?: { isError?: unknown } }[];
+			const responses = Array.isArray(parsed) ? parsed : [parsed];
+			if (responses.some((response) => response.error !== undefined || response.result?.isError === true)) {
+				return true;
+			}
+		} catch {
+			// Ignore SSE control events and malformed response fragments.
+		}
 	}
+	return false;
 }
 
 export class MetricsResponseCapture {
@@ -149,6 +160,12 @@ export class StatelessHttpTransport extends BaseTransport {
 
 		// All other requests can be handled by stub responder
 		return false;
+	}
+
+	private requestsProgress(requestBody: unknown): boolean {
+		const body = requestBody as { method?: unknown; params?: { _meta?: { progressToken?: unknown } } } | undefined;
+		const token = body?.params?._meta?.progressToken;
+		return body?.method === 'tools/call' && (typeof token === 'number' || typeof token === 'string');
 	}
 
 	private hasProxyAppResources(): boolean {
@@ -520,7 +537,7 @@ export class StatelessHttpTransport extends BaseTransport {
 			// Create new transport instance for this request
 			transport = new StreamableHTTPServerTransport({
 				sessionIdGenerator: undefined,
-				enableJsonResponse: true,
+				enableJsonResponse: !this.requestsProgress(requestBody),
 			});
 
 			// Setup cleanup handlers - only cleanup on client disconnect

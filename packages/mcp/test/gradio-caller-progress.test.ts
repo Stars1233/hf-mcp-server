@@ -47,7 +47,10 @@ describe('callGradioToolWithHeaders progress handling', () => {
 	});
 
 	it('requests upstream progress and resets the timeout when progress arrives', async () => {
-		await callGradioToolWithHeaders('https://example.hf.space/gradio_api/mcp/', 'predict', {}, undefined);
+		const onProgress = vi.fn().mockResolvedValue(undefined);
+		await callGradioToolWithHeaders('https://example.hf.space/gradio_api/mcp/', 'predict', {}, undefined, {
+			onProgress,
+		});
 
 		expect(mocks.request).toHaveBeenCalledWith(
 			{
@@ -64,6 +67,13 @@ describe('callGradioToolWithHeaders progress handling', () => {
 				resetTimeoutOnProgress: true,
 			})
 		);
+		const requestOptions = mocks.request.mock.calls[0]?.[2] as {
+			onprogress: (progress: { progress: number; total?: number; message?: string }) => void;
+		};
+		const progress = { progress: 1, total: 2, message: 'Halfway' };
+		requestOptions.onprogress(progress);
+		await Promise.resolve();
+		expect(onProgress).toHaveBeenCalledWith(progress);
 		expect(mocks.close).toHaveBeenCalledOnce();
 	});
 });

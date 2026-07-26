@@ -1,4 +1,4 @@
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { CallToolResult, Progress } from '@modelcontextprotocol/sdk/types.js';
 import { callGradioToolWithHeaders } from '@llmindset/hf-mcp';
 import { logger } from './logger.js';
 import { stripImageContentFromResult, extractUrlFromContent } from './gradio-result-processor.js';
@@ -40,12 +40,14 @@ export async function callGradioTool(
 	mcpUrl: string,
 	toolName: string,
 	parameters: Record<string, unknown>,
-	hfToken: string | undefined
+	hfToken: string | undefined,
+	onProgress?: (progress: Progress) => void | Promise<void>
 ): Promise<CallToolResult> {
 	logger.info({ tool: toolName, params: parameters }, 'Calling Gradio tool via unified caller');
 
 	const { result, capturedHeaders } = await callGradioToolWithHeaders(mcpUrl, toolName, parameters, hfToken, {
 		logProxiedReplica: true,
+		onProgress,
 	});
 
 	// Attach captured headers (e.g., X-Proxied-Replica) to the result meta so callers can inspect them

@@ -1,4 +1,5 @@
 import type { ToolResult } from '../types/tool-result.js';
+import type { Progress } from '@modelcontextprotocol/sdk/types.js';
 import type { z } from 'zod';
 import {
 	spaceArgsSchema,
@@ -204,7 +205,10 @@ export class SpaceTool {
 	 * Returns InvokeResult (with raw MCP content) for invoke operation,
 	 * or ToolResult (with formatted text) for other operations
 	 */
-	async execute(params: SpaceArgs): Promise<InvokeResult | ToolResult> {
+	async execute(
+		params: SpaceArgs,
+		options?: { onProgress?: (progress: Progress) => void | Promise<void> }
+	): Promise<InvokeResult | ToolResult> {
 		const requestedOperation = params.operation;
 
 		// If no operation provided, return usage instructions
@@ -244,7 +248,7 @@ Call this tool with no operation for full usage instructions.`,
 					return await this.handleViewParameters(params);
 
 				case 'invoke':
-					return await this.handleInvoke(params);
+					return await this.handleInvoke(params, options?.onProgress);
 
 				default:
 					return {
@@ -307,7 +311,10 @@ Example:
 	 * Handle invoke operation
 	 * Returns either InvokeResult (with raw MCP content) or ToolResult (error messages)
 	 */
-	private async handleInvoke(params: SpaceArgs): Promise<InvokeResult | ToolResult> {
+	private async handleInvoke(
+		params: SpaceArgs,
+		onProgress?: (progress: Progress) => void | Promise<void>
+	): Promise<InvokeResult | ToolResult> {
 		// Validate required parameters
 		if (!params.space_name) {
 			return {
@@ -349,6 +356,6 @@ Use "${VIEW_PARAMETERS}" to see what parameters this space accepts.`,
 			};
 		}
 
-		return await invokeSpace(params.space_name, params.parameters, this.hfToken);
+		return await invokeSpace(params.space_name, params.parameters, this.hfToken, onProgress);
 	}
 }

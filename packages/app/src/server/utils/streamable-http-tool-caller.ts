@@ -1,4 +1,4 @@
-import type { CallToolResult, ReadResourceResult } from '@modelcontextprotocol/sdk/types.js';
+import type { CallToolResult, Progress, ReadResourceResult } from '@modelcontextprotocol/sdk/types.js';
 import { CallToolResultSchema, ReadResourceResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -26,7 +26,8 @@ export async function callStreamableHttpTool(
 	serverUrl: string,
 	toolName: string,
 	parameters: Record<string, unknown>,
-	hfToken: string | undefined
+	hfToken: string | undefined,
+	onProgress?: (progress: Progress) => void | Promise<void>
 ): Promise<CallToolResult> {
 	logger.trace(
 		{
@@ -70,6 +71,11 @@ export async function callStreamableHttpTool(
 		const requestOptions: RequestOptions = {
 			onprogress: (progress) => {
 				logger.trace({ serverUrl, toolName, progress }, 'Streamable proxy upstream progress event');
+				if (onProgress) {
+					void Promise.resolve(onProgress(progress)).catch((error: unknown) => {
+						logger.warn({ error, serverUrl, toolName }, 'Failed to relay Streamable proxy progress');
+					});
+				}
 			},
 			resetTimeoutOnProgress: true,
 		};

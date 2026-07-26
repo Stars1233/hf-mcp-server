@@ -3,7 +3,7 @@ import {
 	StreamableHTTPClientTransport,
 	type StreamableHTTPClientTransportOptions,
 } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { CallToolResultSchema, type CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { CallToolResultSchema, type CallToolResult, type Progress } from '@modelcontextprotocol/sdk/types.js';
 import { Protocol, type RequestOptions } from '@modelcontextprotocol/sdk/shared/protocol.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { logger } from '../../logger.js';
@@ -26,6 +26,8 @@ export interface GradioCallOptions {
 	onHeaders?: (headers: Headers) => void;
 	/** Log the X-Proxied-Replica header to stderr once */
 	logProxiedReplica?: boolean;
+	/** Receives progress reported by the upstream Gradio MCP server. */
+	onProgress?: (progress: Progress) => void | Promise<void>;
 }
 
 /**
@@ -242,6 +244,11 @@ export async function callGradioToolWithHeaders(
 		const requestOptions: RequestOptions = {
 			onprogress: (progress) => {
 				logger.trace('[gradio] upstream progress event', { toolName, progress });
+				if (options.onProgress) {
+					void Promise.resolve(options.onProgress(progress)).catch((error: unknown) => {
+						logger.trace('[gradio] downstream progress callback failed', { toolName, error });
+					});
+				}
 			},
 			resetTimeoutOnProgress: true,
 		};

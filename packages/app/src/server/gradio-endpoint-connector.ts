@@ -1,6 +1,6 @@
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { type Tool } from '@modelcontextprotocol/sdk/types.js';
+import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js';
+import type { CallToolResult, ServerNotification, ServerRequest, Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { logger } from './utils/logger.js';
 import { logGradioEvent } from './utils/query-logger.js';
@@ -11,6 +11,7 @@ import { createGradioToolName } from './utils/gradio-utils.js';
 import { spaceMetadataCache, CACHE_CONFIG } from './utils/gradio-cache.js';
 import { callGradioTool, applyResultPostProcessing, type GradioToolCallOptions } from './utils/gradio-tool-caller.js';
 import { parseDisabledTools } from './utils/disabled-tools.js';
+import { createProgressRelay } from './utils/progress-relay.js';
 import * as hfMcp from '@llmindset/hf-mcp';
 import { fetchWithProfile, NETWORK_FETCH_PROFILES } from '@llmindset/hf-mcp/network';
 
@@ -345,8 +346,11 @@ function createToolHandler(
 		clientInfo?: { name: string; version: string };
 	},
 	options: RegisterRemoteToolsOptions = {}
-): (params: Record<string, unknown>) => Promise<CallToolResult> {
-	return async (params: Record<string, unknown>) => {
+): (
+	params: Record<string, unknown>,
+	extra: RequestHandlerExtra<ServerRequest, ServerNotification>
+) => Promise<CallToolResult> {
+	return async (params: Record<string, unknown>, extra) => {
 		logger.info({ tool: tool.name, params }, 'Calling remote tool');
 
 		// Track metrics for logging
@@ -361,7 +365,7 @@ function createToolHandler(
 				throw new Error('No MCP URL available for tool execution');
 			}
 
-			const result = await callGradioTool(connection.mcpUrl, tool.name, params, hfToken);
+			const result = await callGradioTool(connection.mcpUrl, tool.name, params, hfToken, createProgressRelay(extra));
 
 			// Calculate response size (rough estimate based on JSON serialization)
 			try {

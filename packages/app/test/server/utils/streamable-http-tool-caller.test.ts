@@ -31,6 +31,7 @@ vi.mock('../../../src/server/utils/logger.js', () => ({
 	logger: {
 		trace: vi.fn(),
 		info: vi.fn(),
+		warn: vi.fn(),
 	},
 }));
 
@@ -43,7 +44,8 @@ describe('callStreamableHttpTool', () => {
 	});
 
 	it('requests upstream progress and resets the timeout when progress arrives', async () => {
-		await callStreamableHttpTool('https://example.com/mcp', 'csv_tool', {}, undefined);
+		const onProgress = vi.fn().mockResolvedValue(undefined);
+		await callStreamableHttpTool('https://example.com/mcp', 'csv_tool', {}, undefined, onProgress);
 
 		expect(mocks.request).toHaveBeenCalledWith(
 			{
@@ -60,6 +62,13 @@ describe('callStreamableHttpTool', () => {
 				resetTimeoutOnProgress: true,
 			})
 		);
+		const requestOptions = mocks.request.mock.calls[0]?.[2] as {
+			onprogress: (progress: { progress: number; total?: number; message?: string }) => void;
+		};
+		const progress = { progress: 1, total: 2, message: 'Halfway' };
+		requestOptions.onprogress(progress);
+		await Promise.resolve();
+		expect(onProgress).toHaveBeenCalledWith(progress);
 		expect(mocks.close).toHaveBeenCalledOnce();
 	});
 });

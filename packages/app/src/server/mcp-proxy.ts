@@ -10,6 +10,8 @@ import { getGradioSpaces } from './utils/gradio-discovery.js';
 import { logToolQuery, type QueryLoggerOptions } from './utils/query-logger.js';
 import type { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js';
+import type { ServerNotification, ServerRequest } from '@modelcontextprotocol/sdk/types.js';
 import { createRequire } from 'module';
 import { createGradioWidgetResourceConfig } from './resources/gradio-widget-resource.js';
 import { callStreamableHttpTool, readStreamableHttpResource } from './utils/streamable-http-tool-caller.js';
@@ -17,6 +19,7 @@ import type { ProxyToolDefinition, ProxyToolInputSchema } from './utils/proxy-to
 import { getProxyToolsConfig } from './utils/proxy-tools-config.js';
 import { rewriteProxyAppToolMeta } from './utils/proxy-apps.js';
 import { parseDisabledTools } from './utils/disabled-tools.js';
+import { createProgressRelay } from './utils/progress-relay.js';
 
 const MCP_APP_RESOURCE_MIME_TYPE = 'text/html;profile=mcp-app';
 
@@ -54,7 +57,10 @@ function registerProxyToolsFromConfig(
 		const title = config.proxyId ? `${config.proxyId} - ${config.upstreamToolName}` : config.toolName;
 		const schemaShape = buildProxyToolSchemaShape(config.inputSchema);
 		const { meta, resourceMapping } = rewriteProxyAppToolMeta(config.meta, config.proxyId, config.upstreamToolName);
-		const handler = async (params: Record<string, unknown>) => {
+		const handler = async (
+			params: Record<string, unknown>,
+			extra: RequestHandlerExtra<ServerRequest, ServerNotification>
+		) => {
 			const start = performance.now();
 			logger.trace(
 				{
@@ -67,7 +73,13 @@ function registerProxyToolsFromConfig(
 			);
 
 			try {
-				const result = await callStreamableHttpTool(config.url, config.upstreamToolName, params, hfToken);
+				const result = await callStreamableHttpTool(
+					config.url,
+					config.upstreamToolName,
+					params,
+					hfToken,
+					createProgressRelay(extra)
+				);
 
 				logToolQuery(config.toolName, config.upstreamToolName, params, {
 					...baseLoggingOptions,
