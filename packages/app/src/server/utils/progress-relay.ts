@@ -31,13 +31,19 @@ export function createProgressRelay(
 			return;
 		}
 
-		fallbackProgress += 1;
+		let progressValue = progress.progress;
+		if (progressValue === undefined) {
+			fallbackProgress += 1;
+			progressValue = fallbackProgress;
+		} else {
+			fallbackProgress = Math.max(fallbackProgress, progressValue);
+		}
 		try {
 			await extra.sendNotification({
 				method: 'notifications/progress',
 				params: {
 					progressToken,
-					progress: progress.progress ?? fallbackProgress,
+					progress: progressValue,
 					...(progress.total !== undefined ? { total: progress.total } : {}),
 					...(progress.message !== undefined ? { message: progress.message } : {}),
 				},

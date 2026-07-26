@@ -495,7 +495,7 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 					inputSchema: HF_JOBS_TOOL_CONFIG.schema.shape,
 					annotations: HF_JOBS_TOOL_CONFIG.annotations,
 				},
-				async (params: z.infer<typeof HF_JOBS_TOOL_CONFIG.schema>) => {
+				async (params: z.infer<typeof HF_JOBS_TOOL_CONFIG.schema>, extra) => {
 					// Jobs require authentication - check if user has token
 					const isAuthenticated = !!hfToken;
 					const loggedOperation = params.operation ?? 'no-operation';
@@ -514,7 +514,7 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 						},
 						async () => {
 							const jobsTool = new HfJobsTool(hfToken, isAuthenticated, username);
-							return jobsTool.execute(params);
+							return jobsTool.execute(params, { onProgress: createProgressRelay(extra) });
 						}
 					);
 

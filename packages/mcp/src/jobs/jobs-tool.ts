@@ -4,6 +4,7 @@ import { HfApiError } from '../hf-api-call.js';
 import { runCommand, uvCommand } from './commands/run.js';
 import { psCommand } from './commands/ps.js';
 import { logsCommand } from './commands/logs.js';
+import type { JobsProgressCallback } from './progress.js';
 import { inspectCommand, cancelCommand } from './commands/inspect.js';
 import {
 	scheduledRunCommand,
@@ -469,7 +470,10 @@ export class HfJobsTool {
 	/**
 	 * Execute a jobs operation
 	 */
-	async execute(params: { operation?: string; args?: Record<string, unknown> }): Promise<ToolResult> {
+	async execute(
+		params: { operation?: string; args?: Record<string, unknown> },
+		options?: { onProgress?: JobsProgressCallback }
+	): Promise<ToolResult> {
 		// If not authenticated, show upgrade message
 		if (!this.isAuthenticated) {
 			return {
@@ -550,11 +554,11 @@ export class HfJobsTool {
 
 			switch (operation) {
 				case 'run':
-					result = await runCommand(parsedArgs as RunArgs, this.client, this.hfToken);
+					result = await runCommand(parsedArgs as RunArgs, this.client, this.hfToken, options?.onProgress);
 					break;
 
 				case 'uv':
-					result = await uvCommand(parsedArgs as UvArgs, this.client, this.hfToken);
+					result = await uvCommand(parsedArgs as UvArgs, this.client, this.hfToken, options?.onProgress);
 					break;
 
 				case 'ps':
@@ -562,7 +566,7 @@ export class HfJobsTool {
 					break;
 
 				case 'logs':
-					result = await logsCommand(parsedArgs as LogsArgs, this.client, this.hfToken);
+					result = await logsCommand(parsedArgs as LogsArgs, this.client, this.hfToken, options?.onProgress);
 					break;
 
 				case 'inspect':

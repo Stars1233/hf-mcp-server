@@ -53,6 +53,16 @@ describe('createProgressRelay', () => {
 		expect(sendNotification.mock.calls.map(([notification]) => notification.params.progress)).toEqual([1, 2]);
 	});
 
+	it('continues fallback progress from an explicit starting value', async () => {
+		const { extra, sendNotification } = makeExtra('token');
+		const relay = createProgressRelay(extra);
+
+		await relay?.({ progress: 0, message: 'Submitting' });
+		await relay?.({ message: 'Running' });
+
+		expect(sendNotification.mock.calls.map(([notification]) => notification.params.progress)).toEqual([0, 1]);
+	});
+
 	it('does not send after the request is aborted', async () => {
 		const abortController = new AbortController();
 		abortController.abort();
