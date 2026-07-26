@@ -1,11 +1,14 @@
 import useSWR from 'swr';
 import { useState } from 'react';
 import type { ColumnDef } from '@tanstack/react-table';
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from './ui/card';
+import { Card, CardContent } from './ui/card';
 import { Checkbox } from './ui/checkbox';
 import { DataTable } from './data-table';
 import { createSortableHeader } from './data-table-utils';
 import type { TransportMetricsResponse } from '../../shared/transport-metrics.js';
+import { Box, Clock3, MessageSquareText, Wrench } from 'lucide-react';
+import { MetricTile, SectionHeader } from './DashboardPrimitives';
+import { formatCompactNumber } from '../lib/dashboard-utils';
 
 // SWR fetcher function
 const fetcher = (url: string) =>
@@ -100,6 +103,12 @@ export function McpMethodsCard() {
 	const resourceReads = processedMethods
 		.filter((m) => m.method.startsWith('resources/read'))
 		.reduce((sum, method) => sum + method.count, 0);
+	const totalErrors = processedMethods.reduce((sum, method) => sum + method.errors, 0);
+	const timedMethods = processedMethods.filter((method) => method.averageResponseTime !== undefined);
+	const averageResponseTime =
+		timedMethods.length === 0
+			? 0
+			: timedMethods.reduce((sum, method) => sum + (method.averageResponseTime ?? 0), 0) / timedMethods.length;
 
 	// Define columns for the data table
 	const columns: ColumnDef<MethodData>[] = [
@@ -208,106 +217,120 @@ export function McpMethodsCard() {
 	];
 
 	return (
-		<Card>
-			<CardHeader>
-				<CardTitle>HTTP JSON Transport Statistics</CardTitle>
-				<CardDescription>
-					MCP method call statistics and performance metrics
-					{isStdioMode ? ' (Empty in STDIO mode)' : ''}
-				</CardDescription>
-			</CardHeader>
-			<CardContent>
-				{isLoading && (
-					<div className="flex items-center justify-center py-8">
-						<div className="text-sm text-muted-foreground">Loading metrics...</div>
-					</div>
-				)}
-
-				{error && (
-					<div className="flex items-center justify-center py-8">
-						<div className="text-sm text-destructive">Error loading metrics: {error.message}</div>
-					</div>
-				)}
-
-				{isStdioMode && (
-					<div className="flex items-center justify-center py-8">
-						<div className="text-sm text-muted-foreground">
-							Method tracking is not available in STDIO mode. This data is only collected for HTTP-based transports.
+		<div className="space-y-5">
+			<SectionHeader
+				title="MCP methods"
+				description={`Call volume, reliability, and response times by operation${isStdioMode ? ' (HTTP transports only)' : ''}.`}
+			/>
+			{metrics && !isStdioMode && (
+				<div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+					<MetricTile
+						label="All method calls"
+						value={formatCompactNumber(totalMcpCalls)}
+						detail={`${processedMethods.length} methods observed`}
+						icon={<Box className="size-5" />}
+						tone="blue"
+					/>
+					<MetricTile
+						label="Tool calls"
+						value={formatCompactNumber(toolCalls)}
+						detail={`${totalErrors} total errors`}
+						icon={<Wrench className="size-5" />}
+						tone="amber"
+					/>
+					<MetricTile
+						label="Prompt attempts"
+						value={formatCompactNumber(promptCalls)}
+						detail={`${formatCompactNumber(resourceReads)} resource reads`}
+						icon={<MessageSquareText className="size-5" />}
+						tone="violet"
+					/>
+					<MetricTile
+						label="Mean response"
+						value={averageResponseTime > 0 ? `${averageResponseTime.toFixed(0)}ms` : '—'}
+						detail="Across methods with timings"
+						icon={<Clock3 className="size-5" />}
+						tone="green"
+					/>
+				</div>
+			)}
+			<Card>
+				<CardContent>
+					{isLoading && (
+						<div className="flex items-center justify-center py-8">
+							<div className="text-sm text-muted-foreground">Loading metrics...</div>
 						</div>
-					</div>
-				)}
+					)}
 
-				{metrics && !isStdioMode && (
-					<div className="space-y-4">
-						{processedMethods.length > 0 && (
-							<div className="flex items-center justify-between">
-								<div className="text-sm text-muted-foreground">
-									Showing {filteredMethods.length} method{filteredMethods.length !== 1 ? 's' : ''} tracked since{' '}
-									{new Date(metrics.startupTime).toLocaleString()}
-								</div>
-								<div className="flex items-center gap-4">
-									<div className="text-sm font-medium">
-										Total MCP Calls: <span className="font-mono">{totalMcpCalls.toLocaleString()}</span>
-									</div>
-									<div className="text-sm font-medium">
-										Tool Calls: <span className="font-mono">{toolCalls.toLocaleString()}</span>
-									</div>
-									<div className="text-sm font-medium">
-										Prompt Attempts: <span className="font-mono">{promptCalls.toLocaleString()}</span>
-									</div>
-									<div className="text-sm font-medium">
-										Resource Reads: <span className="font-mono">{resourceReads.toLocaleString()}</span>
-									</div>
-								</div>
+					{error && (
+						<div className="flex items-center justify-center py-8">
+							<div className="text-sm text-destructive">Error loading metrics: {error.message}</div>
+						</div>
+					)}
+
+					{isStdioMode && (
+						<div className="flex items-center justify-center py-8">
+							<div className="text-sm text-muted-foreground">
+								Method tracking is not available in STDIO mode. This data is only collected for HTTP-based transports.
 							</div>
-						)}
+						</div>
+					)}
 
-						{processedMethods.length > 0 && (
-							<div className="flex items-center space-x-2">
-								<Checkbox
-									id="tool-prompt-calls-filter"
-									checked={showOnlyPrimaryMcpCalls}
-									onCheckedChange={(checked) => setShowOnlyPrimaryMcpCalls(!!checked)}
+					{metrics && !isStdioMode && (
+						<div className="space-y-4">
+							{processedMethods.length > 0 && (
+								<div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+									<div className="text-xs text-muted-foreground">
+										Showing {filteredMethods.length} method{filteredMethods.length !== 1 ? 's' : ''} tracked since{' '}
+										{new Date(metrics.startupTime).toLocaleString()}
+									</div>
+									<div className="flex items-center space-x-2 rounded-lg border bg-muted/30 px-3 py-2">
+										<Checkbox
+											id="tool-prompt-calls-filter"
+											checked={showOnlyPrimaryMcpCalls}
+											onCheckedChange={(checked) => setShowOnlyPrimaryMcpCalls(!!checked)}
+										/>
+										<label
+											htmlFor="tool-prompt-calls-filter"
+											className="cursor-pointer text-xs font-medium leading-none"
+										>
+											Primary MCP calls only
+										</label>
+									</div>
+								</div>
+							)}
+
+							{filteredMethods.length === 0 ? (
+								<div className="flex items-center justify-center py-8">
+									<div className="text-sm text-muted-foreground">
+										{showOnlyPrimaryMcpCalls
+											? 'No tool, prompt, or resource calls recorded yet.'
+											: 'No method calls recorded yet.'}
+									</div>
+								</div>
+							) : (
+								<DataTable
+									columns={columns}
+									data={filteredMethods}
+									searchColumn="method"
+									searchPlaceholder="Filter methods..."
+									pageSize={50}
+									defaultColumnVisibility={{
+										method: true,
+										count: true,
+										errors: false,
+										gradioMetrics: false,
+										errorRate: true,
+										averageResponseTime: metrics.transport === 'streamableHttpJson',
+										lastCalled: true,
+									}}
+									defaultSorting={[{ id: 'count', desc: true }]}
 								/>
-								<label
-									htmlFor="tool-prompt-calls-filter"
-									className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
-								>
-									Show only Tools/Prompts/Resources
-								</label>
-							</div>
-						)}
-
-						{filteredMethods.length === 0 ? (
-							<div className="flex items-center justify-center py-8">
-								<div className="text-sm text-muted-foreground">
-									{showOnlyPrimaryMcpCalls
-										? 'No tool, prompt, or resource calls recorded yet.'
-										: 'No method calls recorded yet.'}
-								</div>
-							</div>
-						) : (
-							<DataTable
-								columns={columns}
-								data={filteredMethods}
-								searchColumn="method"
-								searchPlaceholder="Filter methods..."
-								pageSize={50}
-								defaultColumnVisibility={{
-									method: true,
-									count: true,
-									errors: false,
-									gradioMetrics: false,
-									errorRate: true,
-									averageResponseTime: metrics.transport === 'streamableHttpJson',
-									lastCalled: true,
-								}}
-								defaultSorting={[{ id: 'count', desc: true }]}
-							/>
-						)}
-					</div>
-				)}
-			</CardContent>
-		</Card>
+							)}
+						</div>
+					)}
+				</CardContent>
+			</Card>
+		</div>
 	);
 }
