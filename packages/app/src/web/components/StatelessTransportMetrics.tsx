@@ -98,6 +98,16 @@ export function StatelessTransportMetrics({ metrics }: StatelessTransportMetrics
 		.filter((method) => method.method === 'tools/call' || method.method.startsWith('tools/call:'))
 		.reduce((sum, method) => sum + method.count, 0);
 	const recentClients = metrics.clients.filter((client) => isRecentlyActive(client.lastSeen)).length;
+	const protocolFilterOptions = Array.from(
+		new Map(
+			metrics.clients.flatMap((client) =>
+				client.protocols.map((protocol) => {
+					const value = `${protocol.era}:${protocol.version}`;
+					return [value, { value, label: `${protocol.era} · ${protocol.version}` }] as const;
+				})
+			)
+		).values()
+	).sort((a, b) => b.value.localeCompare(a.value));
 
 	// Define columns for the client identities table
 	const createClientColumns = (): ColumnDef<ClientData>[] => [
@@ -120,6 +130,8 @@ export function StatelessTransportMetrics({ metrics }: StatelessTransportMetrics
 		{
 			id: 'protocols',
 			header: 'Protocol',
+			filterFn: (row, _columnId, filterValue: string) =>
+				row.original.protocols.some((protocol) => `${protocol.era}:${protocol.version}` === filterValue),
 			cell: ({ row }) => (
 				<div className="flex flex-col gap-1">
 					{row.original.protocols.map((protocol) => (
@@ -307,6 +319,11 @@ export function StatelessTransportMetrics({ metrics }: StatelessTransportMetrics
 						data={clientData}
 						searchColumn="name"
 						searchPlaceholder="Filter clients..."
+						facetFilter={{
+							column: 'protocols',
+							label: 'All protocol versions',
+							options: protocolFilterOptions,
+						}}
 						pageSize={50}
 						defaultSorting={[{ id: 'lastSeen', desc: true }]}
 					/>

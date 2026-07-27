@@ -27,6 +27,11 @@ interface DataTableProps<TData, TValue> {
 	data: TData[];
 	searchColumn?: string;
 	searchPlaceholder?: string;
+	facetFilter?: {
+		column: string;
+		label: string;
+		options: Array<{ label: string; value: string }>;
+	};
 	defaultColumnVisibility?: VisibilityState;
 	pageSize?: number;
 	defaultSorting?: SortingState;
@@ -37,6 +42,7 @@ export function DataTable<TData, TValue>({
 	data,
 	searchColumn,
 	searchPlaceholder = 'Filter...',
+	facetFilter,
 	defaultColumnVisibility = {},
 	pageSize = 25,
 	defaultSorting = [],
@@ -82,6 +88,21 @@ export function DataTable<TData, TValue>({
 						onChange={(event) => table.getColumn(searchColumn)?.setFilterValue(event.target.value)}
 						className="w-full sm:max-w-sm"
 					/>
+				)}
+				{facetFilter && (
+					<select
+						aria-label={facetFilter.label}
+						value={(table.getColumn(facetFilter.column)?.getFilterValue() as string) ?? ''}
+						onChange={(event) => table.getColumn(facetFilter.column)?.setFilterValue(event.target.value || undefined)}
+						className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 sm:w-auto sm:min-w-52"
+					>
+						<option value="">{facetFilter.label}</option>
+						{facetFilter.options.map((option) => (
+							<option key={option.value} value={option.value}>
+								{option.label}
+							</option>
+						))}
+					</select>
 				)}
 				<DropdownMenu>
 					<DropdownMenuTrigger asChild>
