@@ -94,6 +94,10 @@ export class ToolSelectionStrategy {
 		return getProxyToolsConfig().map((tool) => tool.toolName);
 	}
 
+	private getProxyConfigIds(): string[] {
+		return getProxyToolsConfig().flatMap((tool) => [tool.proxyId, tool.toolName]);
+	}
+
 	private appendProxyTools(enabledToolIds: string[]): string[] {
 		const proxyToolNames = this.getProxyToolNames();
 		if (proxyToolNames.length === 0) {
@@ -109,7 +113,7 @@ export class ToolSelectionStrategy {
 			HF_FILES_FLAG,
 			README_INCLUDE_FLAG,
 			GRADIO_IMAGE_FILTER_FLAG,
-			...this.getProxyToolNames(),
+			...this.getProxyConfigIds(),
 		]);
 		const unsupportedIds = ids.filter((id) => !supportedIds.has(id));
 		if (unsupportedIds.length > 0) {
