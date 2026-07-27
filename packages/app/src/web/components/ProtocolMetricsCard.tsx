@@ -13,6 +13,34 @@ const fetcher = (url: string) =>
 		return response.json();
 	});
 
+const KNOWN_PROTOCOL_COLORS: Readonly<Record<string, string>> = {
+	'modern:2026-07-28': '#10b981',
+	'legacy:2025-11-25': '#f59e0b',
+	'legacy:2025-06-18': '#3b82f6',
+	'legacy:2025-03-26': '#8b5cf6',
+	'legacy:2024-11-05': '#f43f5e',
+};
+
+function protocolColor(era: 'legacy' | 'modern', version: string): string {
+	const key = `${era}:${version}`;
+	const knownColor = KNOWN_PROTOCOL_COLORS[key];
+	if (knownColor) return knownColor;
+
+	let hash = 0;
+	for (const character of key) {
+		hash = (hash * 31 + character.charCodeAt(0)) % 360;
+	}
+	return `hsl(${hash.toString()} 68% 52%)`;
+}
+
+function formatProtocolShare(requestCount: number, totalRequests: number): string {
+	if (totalRequests === 0 || requestCount === 0) return '0%';
+	const share = (requestCount / totalRequests) * 100;
+	if (share < 0.1) return '<0.1%';
+	if (share < 10) return `${share.toFixed(1)}%`;
+	return `${Math.round(share).toString()}%`;
+}
+
 export function ProtocolMetricsCard() {
 	const { data: metrics, error } = useSWR<TransportMetricsResponse>('/api/transport-metrics', fetcher, {
 		refreshInterval: 3000,
@@ -28,6 +56,7 @@ export function ProtocolMetricsCard() {
 	}
 
 	const totalRequests = metrics.protocolEras.legacy + metrics.protocolEras.modern;
+	const exactVersionTotal = metrics.protocolVersions.reduce((sum, protocol) => sum + protocol.requestCount, 0);
 	const modernShare = totalRequests === 0 ? 0 : Math.round((metrics.protocolEras.modern / totalRequests) * 100);
 	const modernClients = metrics.clients.filter((client) =>
 		client.protocols.some((protocol) => protocol.era === 'modern')
@@ -77,7 +106,7 @@ export function ProtocolMetricsCard() {
 			</div>
 
 			<Card className="overflow-hidden">
-				<CardContent>
+				<CardContent className="space-y-6">
 					<div className="grid items-center gap-6 lg:grid-cols-[1fr_auto]">
 						<div>
 							<div className="mb-3 flex items-end justify-between">
@@ -107,6 +136,70 @@ export function ProtocolMetricsCard() {
 								<p className="text-xs text-muted-foreground">clients seen on both eras</p>
 							</div>
 						</div>
+					</div>
+
+					<div className="border-t pt-6">
+						<div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+							<div>
+								<p className="text-sm font-semibold">Exact protocol-version mix</p>
+								<p className="text-sm text-muted-foreground">Share of attributed MCP requests by wire version</p>
+							</div>
+							<p className="text-xs text-muted-foreground">
+								{formatCompactNumber(exactVersionTotal)} versioned requests
+							</p>
+						</div>
+
+						{exactVersionTotal === 0 ? (
+							<div className="flex h-16 items-center justify-center rounded-xl border border-dashed text-sm text-muted-foreground">
+								Version proportions will appear after the first MCP request.
+							</div>
+						) : (
+							<>
+								<div
+									className="flex h-4 overflow-hidden rounded-full bg-muted"
+									role="img"
+									aria-label="Proportion of requests by exact MCP protocol version"
+								>
+									{metrics.protocolVersions.map((protocol) => {
+										const share = (protocol.requestCount / exactVersionTotal) * 100;
+										return (
+											<div
+												key={`${protocol.era}:${protocol.version}`}
+												className="h-full transition-[width] duration-500"
+												style={{
+													width: `${share.toString()}%`,
+													backgroundColor: protocolColor(protocol.era, protocol.version),
+												}}
+												title={`${protocol.era} ${protocol.version}: ${protocol.requestCount.toLocaleString()} requests (${formatProtocolShare(protocol.requestCount, exactVersionTotal)})`}
+											/>
+										);
+									})}
+								</div>
+								<div className="mt-4 grid gap-x-6 gap-y-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+									{metrics.protocolVersions.map((protocol) => (
+										<div
+											key={`${protocol.era}:${protocol.version}`}
+											className="flex min-w-0 items-center gap-2 text-xs"
+										>
+											<span
+												className="size-2.5 shrink-0 rounded-full"
+												style={{ backgroundColor: protocolColor(protocol.era, protocol.version) }}
+											/>
+											<span className="min-w-0 flex-1 truncate font-mono" title={protocol.version}>
+												{protocol.version}
+											</span>
+											<Badge variant={protocol.era === 'modern' ? 'success' : 'secondary'}>{protocol.era}</Badge>
+											<span className="w-11 text-right font-mono font-semibold">
+												{formatProtocolShare(protocol.requestCount, exactVersionTotal)}
+											</span>
+											<span className="w-12 text-right font-mono text-muted-foreground">
+												{formatCompactNumber(protocol.requestCount)}
+											</span>
+										</div>
+									))}
+								</div>
+							</>
+						)}
 					</div>
 				</CardContent>
 			</Card>
