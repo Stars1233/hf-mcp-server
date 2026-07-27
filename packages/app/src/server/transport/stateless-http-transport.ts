@@ -30,6 +30,7 @@ import { listSkillResources, readSkillResource, readSkillDirectory } from '../sk
 import { RESOURCES_DIRECTORY_READ_METHOD } from '../skills/skill-directory-schema.js';
 import { getProxyToolsConfig } from '../utils/proxy-tools-config.js';
 import { BOUQUET_FALLBACK } from '../../shared/settings.js';
+import { getErrorLogFields } from '../utils/observability.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -365,7 +366,17 @@ export class StatelessHttpTransport extends BaseTransport {
 				);
 				result.server.server.onerror = (error) => {
 					this.trackError(undefined, error);
-					logger.error({ error }, 'Modern HTTP MCP server error');
+					logger.error(
+						{
+							...getErrorLogFields(error),
+							requestId: requestData.requestId,
+							protocolEra: 'modern',
+							protocolVersion: requestData.protocolVersion,
+							clientName: requestData.clientInfo?.name,
+							clientVersion: requestData.clientInfo?.version,
+						},
+						'Modern HTTP MCP server error'
+					);
 				};
 				return result.server;
 			},
@@ -373,7 +384,18 @@ export class StatelessHttpTransport extends BaseTransport {
 				legacy: 'reject',
 				responseMode: 'auto',
 				onerror: (error) => {
-					logger.error({ error }, 'Modern HTTP MCP handler error');
+					const requestData = this.modernRequestStorage.getStore();
+					logger.error(
+						{
+							...getErrorLogFields(error),
+							requestId: requestData?.requestId,
+							protocolEra: 'modern',
+							protocolVersion: requestData?.protocolVersion,
+							clientName: requestData?.clientInfo?.name,
+							clientVersion: requestData?.clientInfo?.version,
+						},
+						'Modern HTTP MCP handler error'
+					);
 				},
 			}
 		);

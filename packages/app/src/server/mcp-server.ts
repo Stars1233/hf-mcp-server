@@ -56,6 +56,7 @@ import { getSkillCatalog } from './skills/skill-catalog-cache.js';
 import { SERVER_VERSION } from './server-build-info.js';
 import { parseDisabledTools } from './utils/disabled-tools.js';
 import { createProgressRelay } from './utils/progress-relay.js';
+import { getToolResultErrorMessage } from './utils/observability.js';
 
 // Bouquet configurations moved to tool-selection-strategy.ts
 
@@ -150,19 +151,6 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 			config: QueryLoggingConfig<T>,
 			work: () => Promise<T>
 		): Promise<T> => {
-			const getToolResultErrorMessage = (result: T): string | undefined => {
-				if (typeof result !== 'object' || result === null || !('isError' in result)) {
-					return undefined;
-				}
-				if (!(result as { isError?: boolean }).isError) {
-					return undefined;
-				}
-				if ('formatted' in result && typeof (result as { formatted?: unknown }).formatted === 'string') {
-					return (result as { formatted: string }).formatted;
-				}
-				return 'Tool returned an error result';
-			};
-
 			const start = performance.now();
 			try {
 				const result = await work();
@@ -793,6 +781,7 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 								responseCharCount: toolResult.formatted.length,
 								durationMs,
 								success,
+								...(toolResult.isError ? { error: getToolResultErrorMessage(toolResult) } : {}),
 							});
 
 							return {
