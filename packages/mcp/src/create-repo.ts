@@ -60,7 +60,7 @@ function assertExhaustiveUnion<T extends never>(_value?: T): void {
 	void _value;
 }
 
-assertExhaustiveUnion<Exclude<HubRepoType, RepoType>>();
+// HubRepoType also includes kernels, which do not use this tool's repository creation API.
 assertExhaustiveUnion<Exclude<RepoType, HubRepoType>>();
 assertExhaustiveUnion<Exclude<SpaceSdk, SupportedSpaceSdk>>();
 assertExhaustiveUnion<Exclude<SupportedSpaceSdk, SpaceSdk>>();

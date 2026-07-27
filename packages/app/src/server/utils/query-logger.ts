@@ -20,6 +20,11 @@ interface QueryLogEntry {
 	serverVersion: string;
 	serverBuildSha: string;
 	clientSessionId?: string | null; // Client to MCP Server connection
+	requestId?: string | null; // Request correlation for request-scoped modern HTTP
+	protocolEra?: 'legacy' | 'modern' | null;
+	protocolVersion?: string | null;
+	clientCapabilities?: string | null;
+	userHash?: string | null;
 	name?: string | null; // ClientInfo.name
 	version?: string | null; // ClientInfo.version
 	methodName: string;
@@ -39,6 +44,11 @@ interface QueryLogEntry {
 
 export interface QueryLoggerOptions {
 	clientSessionId?: string;
+	requestId?: string;
+	protocolEra?: 'legacy' | 'modern';
+	protocolVersion?: string;
+	clientCapabilities?: Record<string, unknown>;
+	userHash?: string;
 	isAuthenticated?: boolean;
 	clientName?: string;
 	clientVersion?: string;
@@ -227,6 +237,11 @@ function logQueryEvent(
 		serverVersion: SERVER_VERSION,
 		serverBuildSha: SERVER_BUILD_SHA,
 		clientSessionId: options?.clientSessionId || null,
+		requestId: options?.requestId || null,
+		protocolEra: options?.protocolEra || null,
+		protocolVersion: options?.protocolVersion || null,
+		clientCapabilities: options?.clientCapabilities ? JSON.stringify(options.clientCapabilities) : null,
+		userHash: options?.userHash || null,
 		isAuthenticated: options?.isAuthenticated ?? false,
 		name: options?.clientName || null,
 		version: options?.clientVersion || null,
@@ -240,21 +255,9 @@ function logQueryEvent(
 }
 
 /**
- * Simple helper to log successful search queries
+ * Log an MCP tool operation.
  */
-export function logSearchQuery(
-	methodName: string,
-	query: string,
-	data: Record<string, unknown>,
-	options?: QueryLoggerOptions
-): void {
-	logQueryEvent(methodName, query, data, options);
-}
-
-/**
- * Simple helper to log prompts (model details, dataset details, user/paper summaries)
- */
-export function logPromptQuery(
+export function logToolQuery(
 	methodName: string,
 	query: string,
 	data: Record<string, unknown>,
@@ -271,6 +274,10 @@ export function logSystemEvent(
 	sessionId: string,
 	options?: {
 		clientSessionId?: string;
+		requestId?: string;
+		protocolEra?: 'legacy' | 'modern';
+		protocolVersion?: string;
+		userHash?: string;
 		isAuthenticated?: boolean;
 		clientName?: string;
 		clientVersion?: string;
@@ -300,7 +307,7 @@ export function logSystemEvent(
 	systemLogger.info(
 		{
 			// Core session tracking fields (no level/message - they are redundant)
-			sessionId, // Direct session ID field instead of using "query"
+			sessionId: options?.protocolEra === 'modern' ? null : sessionId,
 			methodName, // Direct method name field
 
 			// Authorization status
@@ -316,6 +323,10 @@ export function logSystemEvent(
 			// Full request data for context
 			capabilities: options?.capabilities ? JSON.stringify(options.capabilities) : null,
 			clientSessionId: options?.clientSessionId || null,
+			requestId: options?.requestId || null,
+			protocolEra: options?.protocolEra || null,
+			protocolVersion: options?.protocolVersion || null,
+			userHash: options?.userHash || null,
 			requestJson: options?.requestJson
 				? JSON.stringify(options.requestJson)
 				: JSON.stringify({ methodName, sessionId }),
@@ -341,6 +352,12 @@ export function logGradioEvent(
 		responseSizeBytes?: number;
 		notificationCount?: number;
 		isDynamic?: boolean;
+		clientSessionId?: string;
+		requestId?: string;
+		protocolEra?: 'legacy' | 'modern';
+		protocolVersion?: string;
+		clientCapabilities?: Record<string, unknown>;
+		userHash?: string;
 	}
 ): void {
 	if (!gradioLogger) {
@@ -367,7 +384,12 @@ export function logGradioEvent(
 
 	gradioLogger.info(
 		{
-			sessionId,
+			sessionId: options.clientSessionId ?? (options.protocolEra === 'modern' ? null : sessionId),
+			requestId: options.requestId ?? (options.protocolEra === 'modern' ? sessionId : null),
+			protocolEra: options.protocolEra || null,
+			protocolVersion: options.protocolVersion || null,
+			clientCapabilities: options.clientCapabilities ? JSON.stringify(options.clientCapabilities) : null,
+			userHash: options.userHash || null,
 			endpointName, // e.g., "user/repo"
 			name: options.clientName || null,
 			version: options.clientVersion || null,

@@ -1,9 +1,9 @@
-export interface CommandRequest<Command extends string = string> {
+interface CommandRequest<Command extends string = string> {
 	cmd: Command;
 	args: string[];
 }
 
-export interface CommandOption {
+interface CommandOption {
 	key: string;
 	kind: 'boolean' | 'integer' | 'string';
 	nonEmpty?: boolean;
@@ -11,9 +11,9 @@ export interface CommandOption {
 }
 
 export type CommandOptionMap = Readonly<Record<string, CommandOption>>;
-export type ParsedCommandOption = boolean | number | string | string[];
+type ParsedCommandOption = boolean | number | string | string[];
 
-export interface ParsedCommandArgs {
+interface ParsedCommandArgs {
 	positionals: string[];
 	options: Record<string, ParsedCommandOption>;
 }

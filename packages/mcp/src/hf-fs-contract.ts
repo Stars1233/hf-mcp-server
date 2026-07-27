@@ -3,7 +3,7 @@ import { parseCommandArgs, type CommandOptionMap } from './command-args.js';
 
 export const HF_FS_OPERATIONS = ['ls', 'cat', 'stat', 'find', 'search'] as const;
 export const HF_FS_ENTRY_TYPES = ['file', 'dir', 'repo', 'bucket', 'collection', 'paper', 'link'] as const;
-export const HF_FS_SEARCH_SORTS = [
+const HF_FS_SEARCH_SORTS = [
 	'createdAt',
 	'downloads',
 	'likes',
@@ -75,7 +75,7 @@ export const HF_FS_SCHEMA = z.object({
 
 export type HfFsRequest = z.input<typeof HF_FS_SCHEMA>;
 
-export interface ParsedHfFsRequest {
+interface ParsedHfFsRequest {
 	params: HfFsParams;
 	warnings: string[];
 }

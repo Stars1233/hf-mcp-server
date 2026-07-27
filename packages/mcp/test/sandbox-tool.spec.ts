@@ -350,7 +350,7 @@ describe('HfSandboxTool', () => {
 	it('does not expose proxy fetch in the first-release sandbox surface', async () => {
 		const tool = new HfSandboxTool('hf-token', true, 'evalstate', createJobsClient(), createRpcClient());
 
-		await expect(tool.run({ cmd: 'fetch', args: [HANDLE] } as never)).rejects.toThrow(/Invalid enum value/);
+		await expect(tool.run({ cmd: 'fetch', args: [HANDLE] } as never)).rejects.toThrow(/Invalid option/);
 	});
 
 	it('caches the nonce and expose URL so repeat operations skip the Jobs API', async () => {

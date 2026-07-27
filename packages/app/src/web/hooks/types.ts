@@ -2,7 +2,7 @@ export type OpenAiGlobals<
 	ToolInput = UnknownObject,
 	ToolOutput = UnknownObject,
 	ToolResponseMetadata = UnknownObject,
-	WidgetState = UnknownObject
+	WidgetState = UnknownObject,
 > = {
 	// visuals
 	theme: Theme;
@@ -34,7 +34,7 @@ type API = {
 	requestDisplayMode: RequestDisplayMode;
 };
 
-export type UnknownObject = Record<string, unknown>;
+type UnknownObject = Record<string, unknown>;
 
 export type Theme = 'light' | 'dark';
 
@@ -45,13 +45,13 @@ type SafeAreaInsets = {
 	right: number;
 };
 
-export type SafeArea = {
+type SafeArea = {
 	insets: SafeAreaInsets;
 };
 
 type DeviceType = 'mobile' | 'tablet' | 'desktop' | 'unknown';
 
-export type UserAgent = {
+type UserAgent = {
 	device: { type: DeviceType };
 	capabilities: {
 		hover: boolean;
@@ -74,10 +74,7 @@ type CallToolResponse = {
 };
 
 /** Calling APIs */
-type CallTool = (
-	name: string,
-	args: Record<string, unknown>
-) => Promise<CallToolResponse>;
+type CallTool = (name: string, args: Record<string, unknown>) => Promise<CallToolResponse>;
 
 /** Extra events */
 export const SET_GLOBALS_EVENT_TYPE = 'openai:set_globals';

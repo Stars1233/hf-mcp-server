@@ -1,11 +1,34 @@
 import { createHash } from 'node:crypto';
 import type { TransportType } from './constants.js';
 
+export type ProtocolEra = 'legacy' | 'modern';
+
+interface ProtocolUsageMetrics {
+	era: ProtocolEra;
+	version: string;
+	requestCount: number;
+	firstSeen: Date;
+	lastSeen: Date;
+}
+
+interface AggregateProtocolUsageMetrics extends ProtocolUsageMetrics {
+	uniqueClients: number;
+	uniqueUsers: number;
+	unattributedRequests: number;
+}
+
 /**
  * Core metrics data tracked by each transport
  */
 export interface TransportMetrics {
 	startupTime: Date;
+
+	// Requests split by protocol behavior era.
+	protocolEras: {
+		legacy: number;
+		modern: number;
+	};
+	protocolVersions: Map<string, AggregateProtocolUsageMetrics>;
 
 	// Connection metrics
 	connections: {
@@ -15,11 +38,12 @@ export interface TransportMetrics {
 		denied: number;
 		anonymous: number;
 		unauthorized?: number; // 401 errors
-		cleaned?: number; // Only for stateful transports
+		cleaned?: number;
 		uniqueIps?: number; // Unique IP addresses that have connected
+		uniqueUsers?: number; // Unique authenticated HF usernames, stored as hashes
 	};
 
-	// Session lifecycle metrics (only for stateful transports)
+	// Session lifecycle metrics (including stateless analytics sessions)
 	sessions?: {
 		created: number;
 		resumedFailed: number;
@@ -33,14 +57,6 @@ export interface TransportMetrics {
 		lastMinute: number;
 		lastHour: number;
 		last3Hours: number;
-	};
-
-	// Ping metrics (for stateful transports)
-	pings?: {
-		sent: number;
-		successful: number;
-		failed: number;
-		lastPingTime?: Date;
 	};
 
 	// Error metrics
@@ -68,7 +84,7 @@ export interface TransportMetrics {
 /**
  * Metrics per client identity (name@version)
  */
-export interface ClientMetrics {
+interface ClientMetrics {
 	name: string;
 	version: string;
 	requestCount: number;
@@ -81,6 +97,8 @@ export interface ClientMetrics {
 	newIpCount: number;
 	anonCount: number;
 	uniqueAuthCount: number;
+	uniqueUserCount: number;
+	protocols: Map<string, ProtocolUsageMetrics>;
 }
 
 /**
@@ -94,7 +112,7 @@ interface ClientMethodMetrics {
 /**
  * Metrics per MCP method
  */
-export interface MethodMetrics {
+interface MethodMetrics {
 	method: string;
 	count: number;
 	firstCalled: Date;
@@ -107,7 +125,7 @@ export interface MethodMetrics {
 /**
  * API call metrics for external HuggingFace API calls
  */
-export interface ApiCallMetrics {
+interface ApiCallMetrics {
 	anonymous: number;
 	authenticated: number;
 	unauthorized: number; // 401
@@ -117,7 +135,7 @@ export interface ApiCallMetrics {
 /**
  * Gradio tool call metrics
  */
-export interface GradioToolMetrics {
+interface GradioToolMetrics {
 	success: number;
 	failure: number;
 	byTool: Record<string, { success: number; failure: number }>;
@@ -126,7 +144,7 @@ export interface GradioToolMetrics {
 /**
  * Gradio cache metrics for space metadata and schemas
  */
-export interface GradioCacheMetrics {
+interface GradioCacheMetrics {
 	spaceMetadata: {
 		hits: number;
 		misses: number;
@@ -147,6 +165,8 @@ export interface GradioCacheMetrics {
 
 const MAX_DISTINCT_METHOD_DETAILS = 500;
 const UNEXPECTED_METHOD_DETAIL = '__unexpected__';
+const MAX_DISTINCT_PROTOCOL_VERSIONS = 32;
+const UNEXPECTED_PROTOCOL_VERSION = '__other__';
 
 /**
  * API response format for transport metrics
@@ -160,10 +180,10 @@ export interface SessionData {
 		version: string;
 	};
 	isConnected: boolean;
-	connectionStatus?: 'Connected' | 'Distressed' | 'Disconnected';
-	pingFailures?: number;
-	lastPingAttempt?: string; // ISO date string
+	connectionStatus?: 'Connected' | 'Disconnected';
 	ipAddress?: string;
+	protocolEra?: ProtocolEra;
+	protocolVersion?: string;
 }
 
 export interface TransportMetricsResponse {
@@ -172,24 +192,34 @@ export interface TransportMetricsResponse {
 	startupTime: string; // ISO date string
 	currentTime: string; // ISO date string
 	uptimeSeconds: number;
-
-	// Configuration settings (only for stateful transports)
-	configuration?: {
-		heartbeatInterval: number; // milliseconds
-		staleCheckInterval: number; // milliseconds
-		staleTimeout: number; // milliseconds
-		pingEnabled?: boolean;
-		pingInterval?: number; // milliseconds
-		pingFailureThreshold?: number; // number of failed pings before distressed
+	protocolEras: {
+		legacy: number;
+		modern: number;
 	};
+	protocolVersions: Array<{
+		era: ProtocolEra;
+		version: string;
+		requestCount: number;
+		uniqueClients: number;
+		uniqueUsers: number;
+		unattributedRequests: number;
+		firstSeen: string;
+		lastSeen: string;
+	}>;
 
 	connections: {
 		active: number | 'stateless';
 		total: number;
+		authenticated: number;
+		denied: number;
+		anonymous: number;
+		unauthorized?: number;
 		cleaned?: number;
+		uniqueIps?: number;
+		uniqueUsers?: number;
 	};
 
-	// Session lifecycle metrics (only for stateful transports)
+	// Session lifecycle metrics (including stateless analytics sessions)
 	sessionLifecycle?: {
 		created: number;
 		resumedFailed: number;
@@ -207,13 +237,6 @@ export interface TransportMetricsResponse {
 	// Static page hits (stateless transport only)
 	staticPageHits200?: number;
 	staticPageHits405?: number;
-
-	pings?: {
-		sent: number;
-		successful: number;
-		failed: number;
-		lastPingTime?: string; // ISO date string
-	};
 
 	errors: {
 		expected: number;
@@ -238,6 +261,14 @@ export interface TransportMetricsResponse {
 		newIpCount: number;
 		anonCount: number;
 		uniqueAuthCount: number;
+		uniqueUserCount: number;
+		protocols: Array<{
+			era: ProtocolEra;
+			version: string;
+			requestCount: number;
+			firstSeen: string;
+			lastSeen: string;
+		}>;
 	}>;
 
 	sessions: SessionData[];
@@ -284,15 +315,17 @@ export function formatMetricsForAPI(
 		startupTime: metrics.startupTime.toISOString(),
 		currentTime: currentTime.toISOString(),
 		uptimeSeconds,
+		protocolEras: metrics.protocolEras,
+		protocolVersions: Array.from(metrics.protocolVersions.values())
+			.map((protocol) => ({
+				...protocol,
+				firstSeen: protocol.firstSeen.toISOString(),
+				lastSeen: protocol.lastSeen.toISOString(),
+			}))
+			.sort((a, b) => b.requestCount - a.requestCount),
 		connections: metrics.connections,
 		sessionLifecycle: metrics.sessions,
 		requests: metrics.requests,
-		pings: metrics.pings
-			? {
-					...metrics.pings,
-					lastPingTime: metrics.pings.lastPingTime?.toISOString(),
-				}
-			: undefined,
 		errors: {
 			...metrics.errors,
 			lastError: metrics.errors.lastError
@@ -306,6 +339,13 @@ export function formatMetricsForAPI(
 			...client,
 			firstSeen: client.firstSeen.toISOString(),
 			lastSeen: client.lastSeen.toISOString(),
+			protocols: Array.from(client.protocols.values())
+				.map((protocol) => ({
+					...protocol,
+					firstSeen: protocol.firstSeen.toISOString(),
+					lastSeen: protocol.lastSeen.toISOString(),
+				}))
+				.sort((a, b) => b.lastSeen.localeCompare(a.lastSeen)),
 		})),
 		sessions,
 		staticPageHits200: metrics.staticPageHits200,
@@ -336,6 +376,11 @@ export function isInitializeRequest(method: string): boolean {
 function createEmptyMetrics(): TransportMetrics {
 	return {
 		startupTime: new Date(),
+		protocolEras: {
+			legacy: 0,
+			modern: 0,
+		},
+		protocolVersions: new Map(),
 		connections: {
 			active: 0,
 			total: 0,
@@ -380,41 +425,41 @@ class RollingWindowCounter {
 	private readonly buckets: number[];
 	private currentBucket: number = 0;
 	private lastRotation: number = Date.now();
-	
+
 	constructor(windowMinutes: number) {
 		this.buckets = new Array(windowMinutes).fill(0);
 	}
-	
+
 	increment(): void {
 		this.rotateBucketsIfNeeded();
 		const current = this.buckets[this.currentBucket] ?? 0;
 		this.buckets[this.currentBucket] = current + 1;
 	}
-	
+
 	getCount(): number {
 		this.rotateBucketsIfNeeded();
 		return this.buckets.reduce((sum, count) => sum + count, 0);
 	}
-	
+
 	private rotateBucketsIfNeeded(): void {
 		const now = Date.now();
 		const minutesPassed = Math.floor((now - this.lastRotation) / 60000);
-		
+
 		// Rotate and clear buckets for each minute that has passed
 		for (let i = 0; i < minutesPassed && i < this.buckets.length; i++) {
 			this.currentBucket = (this.currentBucket + 1) % this.buckets.length;
 			this.buckets[this.currentBucket] = 0;
 		}
-		
+
 		// If all buckets need to be cleared (time gap > window size)
 		if (minutesPassed >= this.buckets.length) {
 			this.buckets.fill(0);
 			this.currentBucket = 0;
 		}
-		
+
 		if (minutesPassed > 0) {
 			// Update to the last minute boundary that was processed
-			this.lastRotation = this.lastRotation + (minutesPassed * 60000);
+			this.lastRotation = this.lastRotation + minutesPassed * 60000;
 		}
 	}
 }
@@ -424,6 +469,14 @@ class RollingWindowCounter {
  */
 function hashToken(token: string): string {
 	return createHash('sha256').update(token).digest('hex');
+}
+
+export function hashUserIdentity(username: string): string {
+	return createHash('sha256').update(username.trim().toLowerCase()).digest('hex');
+}
+
+function getProtocolKey(era: ProtocolEra, version: string): string {
+	return `${era}:${version}`;
 }
 
 /**
@@ -437,6 +490,10 @@ export class MetricsCounter {
 	private uniqueIps: Set<string>;
 	private clientIps: Map<string, Set<string>>; // Map of clientKey -> Set of IPs
 	private clientAuthHashes: Map<string, Set<string>>; // Map of clientKey -> Set of auth token hashes
+	private uniqueUserHashes: Set<string>;
+	private clientUserHashes: Map<string, Set<string>>;
+	private protocolClientKeys: Map<string, Set<string>>;
+	private protocolUserHashes: Map<string, Set<string>>;
 	private methodDetailsByBaseMethod: Map<string, Set<string>>;
 
 	constructor() {
@@ -447,6 +504,10 @@ export class MetricsCounter {
 		this.uniqueIps = new Set();
 		this.clientIps = new Map();
 		this.clientAuthHashes = new Map();
+		this.uniqueUserHashes = new Set();
+		this.clientUserHashes = new Map();
+		this.protocolClientKeys = new Map();
+		this.protocolUserHashes = new Map();
 		this.methodDetailsByBaseMethod = new Map();
 	}
 
@@ -454,20 +515,11 @@ export class MetricsCounter {
 	 * Get the underlying metrics data
 	 */
 	getMetrics(): TransportMetrics {
-		// Calculate rates (requests per minute) for each window
-		// Note: All values represent "requests per minute" calculated over their respective windows
-		this.metrics.requests.lastMinute = this.rollingMinute.getCount(); // Requests in last 1 minute (already per minute)
-
-		// For longer windows, divide total count by window size to get per-minute rate
-		const hourCount = this.rollingHour.getCount();
-		const threeHourCount = this.rolling3Hours.getCount();
-
-		// Calculate per-minute rates for the longer windows
-		this.metrics.requests.lastHour = Math.round((hourCount / 60) * 100) / 100; // Requests per minute over last hour
-		this.metrics.requests.last3Hours = Math.round((threeHourCount / 180) * 100) / 100; // Requests per minute over last 3 hours
+		this.updateRequestRates();
 
 		// Update unique IPs count
 		this.metrics.connections.uniqueIps = this.uniqueIps.size;
+		this.metrics.connections.uniqueUsers = this.uniqueUserHashes.size;
 
 		return this.metrics;
 	}
@@ -477,24 +529,131 @@ export class MetricsCounter {
 	 */
 	trackRequest(): void {
 		this.metrics.requests.total++;
-		this.updateRequestsPerMinute();
-		
+
 		// Update rolling window counters
 		this.rollingMinute.increment();
 		this.rollingHour.increment();
 		this.rolling3Hours.increment();
-		
-		// Calculate rates (requests per minute) for each window
-		// Note: All values represent "requests per minute" calculated over their respective windows
-		this.metrics.requests.lastMinute = this.rollingMinute.getCount(); // Requests in last 1 minute (already per minute)
-		
-		// For longer windows, divide total count by window size to get per-minute rate
-		const hourCount = this.rollingHour.getCount();
-		const threeHourCount = this.rolling3Hours.getCount();
-		
-		// Calculate per-minute rates for the longer windows
-		this.metrics.requests.lastHour = Math.round((hourCount / 60) * 100) / 100; // Requests per minute over last hour
-		this.metrics.requests.last3Hours = Math.round((threeHourCount / 180) * 100) / 100; // Requests per minute over last 3 hours
+
+		this.updateRequestRates();
+	}
+
+	/**
+	 * Track the protocol era selected for an MCP request.
+	 */
+	trackProtocolEra(era: ProtocolEra): void {
+		this.metrics.protocolEras[era]++;
+	}
+
+	/**
+	 * Track one request under its exact negotiated/proposed protocol version.
+	 */
+	trackProtocolRequest(era: ProtocolEra, version: string): void {
+		this.trackProtocolEra(era);
+		const normalizedVersion = this.normalizeProtocolVersion(era, version);
+		const key = getProtocolKey(era, normalizedVersion);
+		const existing = this.metrics.protocolVersions.get(key);
+		if (existing) {
+			existing.requestCount++;
+			existing.unattributedRequests++;
+			existing.lastSeen = new Date();
+			return;
+		}
+		this.metrics.protocolVersions.set(key, {
+			era,
+			version: normalizedVersion,
+			requestCount: 1,
+			uniqueClients: 0,
+			uniqueUsers: 0,
+			unattributedRequests: 1,
+			firstSeen: new Date(),
+			lastSeen: new Date(),
+		});
+	}
+
+	/**
+	 * Attribute a protocol request to an MCP client implementation.
+	 */
+	trackClientProtocol(clientInfo: { name: string; version: string }, era: ProtocolEra, version: string): void {
+		const clientKey = getClientKey(clientInfo.name, clientInfo.version);
+		const clientMetrics = this.metrics.clients.get(clientKey);
+		if (!clientMetrics) return;
+
+		const normalizedVersion = this.normalizeProtocolVersion(era, version);
+		const protocolKey = getProtocolKey(era, normalizedVersion);
+		const clientProtocol = clientMetrics.protocols.get(protocolKey);
+		if (clientProtocol) {
+			clientProtocol.requestCount++;
+			clientProtocol.lastSeen = new Date();
+		} else {
+			clientMetrics.protocols.set(protocolKey, {
+				era,
+				version: normalizedVersion,
+				requestCount: 1,
+				firstSeen: new Date(),
+				lastSeen: new Date(),
+			});
+		}
+
+		let clients = this.protocolClientKeys.get(protocolKey);
+		if (!clients) {
+			clients = new Set();
+			this.protocolClientKeys.set(protocolKey, clients);
+		}
+		clients.add(clientKey);
+		const aggregate = this.metrics.protocolVersions.get(protocolKey);
+		if (aggregate) {
+			aggregate.uniqueClients = clients.size;
+			aggregate.unattributedRequests = Math.max(0, aggregate.unattributedRequests - 1);
+		}
+	}
+
+	/**
+	 * Count authenticated users without retaining raw usernames.
+	 */
+	trackAuthenticatedUser(
+		username: string,
+		era: ProtocolEra,
+		version: string,
+		clientInfo?: { name: string; version: string }
+	): string {
+		const userHash = hashUserIdentity(username);
+		this.uniqueUserHashes.add(userHash);
+
+		const normalizedVersion = this.normalizeProtocolVersion(era, version);
+		const protocolKey = getProtocolKey(era, normalizedVersion);
+		let protocolUsers = this.protocolUserHashes.get(protocolKey);
+		if (!protocolUsers) {
+			protocolUsers = new Set();
+			this.protocolUserHashes.set(protocolKey, protocolUsers);
+		}
+		protocolUsers.add(userHash);
+		const aggregate = this.metrics.protocolVersions.get(protocolKey);
+		if (aggregate) aggregate.uniqueUsers = protocolUsers.size;
+
+		if (clientInfo) {
+			const clientKey = getClientKey(clientInfo.name, clientInfo.version);
+			let clientUsers = this.clientUserHashes.get(clientKey);
+			if (!clientUsers) {
+				clientUsers = new Set();
+				this.clientUserHashes.set(clientKey, clientUsers);
+			}
+			clientUsers.add(userHash);
+			const clientMetrics = this.metrics.clients.get(clientKey);
+			if (clientMetrics) clientMetrics.uniqueUserCount = clientUsers.size;
+		}
+		return userHash;
+	}
+
+	private normalizeProtocolVersion(era: ProtocolEra, version: string): string {
+		const normalized = version || 'unknown';
+		const key = getProtocolKey(era, normalized);
+		if (this.metrics.protocolVersions.has(key)) return normalized;
+
+		const distinctForEra = Array.from(this.metrics.protocolVersions.values()).filter(
+			(protocol) => protocol.era === era && protocol.version !== UNEXPECTED_PROTOCOL_VERSION
+		).length;
+		return distinctForEra < MAX_DISTINCT_PROTOCOL_VERSIONS ? normalized : UNEXPECTED_PROTOCOL_VERSION;
 	}
 
 	/**
@@ -634,6 +793,8 @@ export class MetricsCounter {
 				newIpCount: 0,
 				anonCount: 0,
 				uniqueAuthCount: 0,
+				uniqueUserCount: 0,
+				protocols: new Map(),
 			};
 			this.metrics.clients.set(clientKey, clientMetrics);
 		} else {
@@ -768,49 +929,6 @@ export class MetricsCounter {
 	}
 
 	/**
-	 * Track a ping being sent
-	 */
-	trackPingSent(): void {
-		if (!this.metrics.pings) {
-			this.metrics.pings = {
-				sent: 0,
-				successful: 0,
-				failed: 0,
-			};
-		}
-		this.metrics.pings.sent++;
-	}
-
-	/**
-	 * Track a successful ping response
-	 */
-	trackPingSuccess(): void {
-		if (!this.metrics.pings) {
-			this.metrics.pings = {
-				sent: 0,
-				successful: 0,
-				failed: 0,
-			};
-		}
-		this.metrics.pings.successful++;
-		this.metrics.pings.lastPingTime = new Date();
-	}
-
-	/**
-	 * Track a failed ping
-	 */
-	trackPingFailed(): void {
-		if (!this.metrics.pings) {
-			this.metrics.pings = {
-				sent: 0,
-				successful: 0,
-				failed: 0,
-			};
-		}
-		this.metrics.pings.failed++;
-	}
-
-	/**
 	 * Track a static page hit with status code
 	 */
 	trackStaticPageHit(statusCode: number): void {
@@ -854,7 +972,6 @@ export class MetricsCounter {
 		}
 	}
 
-
 	/**
 	 * Track a failed session resumption attempt
 	 */
@@ -874,14 +991,19 @@ export class MetricsCounter {
 	}
 
 	/**
-	 * Update requests per minute calculation
+	 * Update request rates using only the portion of each window for which the
+	 * current process has actually been running. A server with 30 minutes of
+	 * uptime must not dilute its one-hour and three-hour rates over 60 or 180
+	 * minutes. Rates are recalculated when read so lifetime throughput decays
+	 * correctly during idle periods.
 	 */
-	private updateRequestsPerMinute(): void {
-		const now = Date.now();
-		const startupTime = this.metrics.startupTime.getTime();
-		const uptimeMinutes = (now - startupTime) / (1000 * 60);
+	private updateRequestRates(): void {
+		const uptimeMinutes = Math.max((Date.now() - this.metrics.startupTime.getTime()) / 60000, 1);
+		const roundRate = (count: number, minutes: number): number => Math.round((count / minutes) * 100) / 100;
 
-		this.metrics.requests.averagePerMinute =
-			uptimeMinutes > 0 ? Math.round((this.metrics.requests.total / uptimeMinutes) * 100) / 100 : 0;
+		this.metrics.requests.lastMinute = this.rollingMinute.getCount();
+		this.metrics.requests.lastHour = roundRate(this.rollingHour.getCount(), Math.min(uptimeMinutes, 60));
+		this.metrics.requests.last3Hours = roundRate(this.rolling3Hours.getCount(), Math.min(uptimeMinutes, 180));
+		this.metrics.requests.averagePerMinute = roundRate(this.metrics.requests.total, uptimeMinutes);
 	}
 }

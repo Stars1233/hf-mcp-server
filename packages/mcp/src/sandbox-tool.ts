@@ -726,14 +726,12 @@ HANDLE is returned by create. Volume SPEC is ${VOLUME_FORMAT}.
 No pipes, redirects, shell expansion, or multiple commands.`;
 
 function createSandboxSchema(username?: string) {
-	return z
-		.object({
-			cmd: z.enum(SANDBOX_OPERATIONS).describe('Command to execute.'),
-			args: z
-				.array(z.string())
-				.describe(`Command arguments; each array item is one grammar token. ${handleDescription(username)}`),
-		})
-		.strict();
+	return z.strictObject({
+		cmd: z.enum(SANDBOX_OPERATIONS).describe('Command to execute.'),
+		args: z
+			.array(z.string())
+			.describe(`Command arguments; each array item is one grammar token. ${handleDescription(username)}`),
+	});
 }
 
 function createSandboxOutputSchema() {
@@ -745,12 +743,12 @@ function createSandboxOutputSchema() {
 		job_id: z.string().optional(),
 		url: z.string().optional(),
 		job_url: z.string().optional(),
-		volumes: z.array(z.record(z.unknown())).optional(),
+		volumes: z.array(z.record(z.string(), z.unknown())).optional(),
 		message: z.string().optional(),
-		status: z.record(z.unknown()).optional(),
-		health: z.record(z.unknown()).optional(),
+		status: z.record(z.string(), z.unknown()).optional(),
+		health: z.record(z.string(), z.unknown()).optional(),
 		terminated: z.boolean().optional(),
-		processes: z.array(z.record(z.unknown())).optional(),
+		processes: z.array(z.record(z.string(), z.unknown())).optional(),
 		process_id: z.string().optional(),
 		killed: z.boolean().optional(),
 	});
@@ -867,11 +865,7 @@ export interface SandboxKillResult {
 }
 
 export type SandboxResult =
-	| SandboxCreateResult
-	| SandboxStatusResult
-	| SandboxTerminateResult
-	| SandboxPsResult
-	| SandboxKillResult;
+	SandboxCreateResult | SandboxStatusResult | SandboxTerminateResult | SandboxPsResult | SandboxKillResult;
 
 function generateName(): string {
 	const adjectives = ['calm', 'bright', 'clear', 'quick', 'steady', 'fresh', 'kind', 'prime'];
@@ -1159,14 +1153,12 @@ Foreground timeout defaults to ${String(DEFAULT_EXEC_TIMEOUT)} seconds and may n
 Detached commands have no timeout unless set. Redirect detached output to a file.`;
 
 function createSandboxExecSchema(username?: string) {
-	return z
-		.object({
-			cmd: z.enum(SANDBOX_EXEC_OPERATIONS).describe('Command to execute.'),
-			args: z
-				.array(z.string())
-				.describe(`Command arguments; each array item is one grammar token. ${handleDescription(username)}`),
-		})
-		.strict();
+	return z.strictObject({
+		cmd: z.enum(SANDBOX_EXEC_OPERATIONS).describe('Command to execute.'),
+		args: z
+			.array(z.string())
+			.describe(`Command arguments; each array item is one grammar token. ${handleDescription(username)}`),
+	});
 }
 
 function createSandboxExecOutputSchema() {
@@ -1342,21 +1334,19 @@ Grammar; each token below is one args array element:
 PATH is an absolute path inside the sandbox. cat defaults to ${String(DEFAULT_CAT_MAX_BYTES)} bytes and allows at most ${String(MAX_CAT_BYTES)}.`;
 
 function createSandboxFsSchema(username?: string) {
-	return z
-		.object({
-			cmd: z.enum(SANDBOX_FS_OPERATIONS).describe('Command to execute.'),
-			args: z
-				.array(z.string())
-				.describe(`Command arguments; each array item is one grammar token. ${handleDescription(username)}`),
-		})
-		.strict();
+	return z.strictObject({
+		cmd: z.enum(SANDBOX_FS_OPERATIONS).describe('Command to execute.'),
+		args: z
+			.array(z.string())
+			.describe(`Command arguments; each array item is one grammar token. ${handleDescription(username)}`),
+	});
 }
 
 function createSandboxFsOutputSchema() {
 	return z.object({
 		op: z.enum(SANDBOX_FS_OPERATIONS),
 		path: z.string(),
-		entries: z.array(z.record(z.unknown())).optional(),
+		entries: z.array(z.record(z.string(), z.unknown())).optional(),
 		content: z.string().optional(),
 		bytes: z.number().optional(),
 		size: z.number().optional(),

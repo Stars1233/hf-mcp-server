@@ -46,6 +46,8 @@ export function DataTable<TData, TValue>({
 	const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>(defaultColumnVisibility);
 	const [rowSelection, setRowSelection] = React.useState({});
 
+	// TanStack Table intentionally manages mutable callbacks; React Compiler skips this component safely.
+	// eslint-disable-next-line react-hooks/incompatible-library
 	const table = useReactTable({
 		data,
 		columns,
@@ -72,18 +74,18 @@ export function DataTable<TData, TValue>({
 
 	return (
 		<div className="w-full">
-			<div className="flex items-center py-4">
+			<div className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center">
 				{searchColumn && (
 					<Input
 						placeholder={searchPlaceholder}
 						value={(table.getColumn(searchColumn)?.getFilterValue() as string) ?? ''}
 						onChange={(event) => table.getColumn(searchColumn)?.setFilterValue(event.target.value)}
-						className="max-w-sm"
+						className="w-full sm:max-w-sm"
 					/>
 				)}
 				<DropdownMenu>
 					<DropdownMenuTrigger asChild>
-						<Button variant="outline" className="ml-auto">
+						<Button variant="outline" className="sm:ml-auto">
 							Columns <ChevronDown className="ml-2 h-4 w-4" />
 						</Button>
 					</DropdownMenuTrigger>
@@ -106,8 +108,8 @@ export function DataTable<TData, TValue>({
 					</DropdownMenuContent>
 				</DropdownMenu>
 			</div>
-			<div className="rounded-md border">
-				<Table>
+			<div className="rounded-xl border bg-card">
+				<Table className="min-w-[760px]">
 					<TableHeader>
 						{table.getHeaderGroups().map((headerGroup) => (
 							<TableRow key={headerGroup.id}>
@@ -140,7 +142,7 @@ export function DataTable<TData, TValue>({
 					</TableBody>
 				</Table>
 			</div>
-			<div className="flex items-center justify-end space-x-2 py-4">
+			<div className="flex items-center justify-end space-x-2 pt-3">
 				<div className="text-muted-foreground flex-1 text-sm">
 					{table.getFilteredRowModel().rows.length} row(s) total.
 				</div>

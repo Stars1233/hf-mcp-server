@@ -1,11 +1,10 @@
 import { readFile } from 'node:fs/promises';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import type { Tool } from '@modelcontextprotocol/sdk/types.js';
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+import type { Tool } from '@modelcontextprotocol/client';
 import { fetchWithProfile, NETWORK_FETCH_PROFILES, parseAndValidateUrl } from '@llmindset/hf-mcp/network';
 import { logger } from './logger.js';
 
-export type ProxyToolResponseType = 'JSON' | 'SSE';
+type ProxyToolResponseType = 'JSON' | 'SSE';
 
 interface ProxyToolSource {
 	proxyId: string;
@@ -18,7 +17,6 @@ export interface ProxyToolDefinition {
 	toolName: string;
 	upstreamToolName: string;
 	url: string;
-	responseType: ProxyToolResponseType;
 	description?: string;
 	inputSchema?: ProxyToolInputSchema;
 	meta?: Record<string, unknown>;
@@ -31,7 +29,7 @@ export interface ProxyToolInputSchema {
 	[key: string]: unknown;
 }
 
-export interface ProxyToolSchemaProperty {
+interface ProxyToolSchemaProperty {
 	type?: string;
 	description?: string;
 	default?: unknown;
@@ -48,55 +46,9 @@ const PROXY_TOOL_URL_POLICY = NETWORK_FETCH_PROFILES.httpOrHttpsPermissive().url
 
 let cachedTools: ProxyToolDefinition[] | null = null;
 let cachedConfigPromise: Promise<ProxyToolDefinition[]> | null = null;
-let cachedToolsByName: Map<string, ProxyToolDefinition> = new Map();
 
 export function getProxyToolsConfig(): ProxyToolDefinition[] {
 	return cachedTools ?? [];
-}
-
-export function getProxyToolDefinition(toolName: string): ProxyToolDefinition | undefined {
-	return cachedToolsByName.get(toolName);
-}
-
-export function cacheDiscoveredProxyAppTool(
-	parentConfig: ProxyToolDefinition,
-	toolName: string,
-	argumentKeys: string[]
-): ProxyToolDefinition {
-	const existing = cachedToolsByName.get(toolName);
-	const existingProperties = existing?.inputSchema?.properties ?? {};
-	const discoveredProperties = Object.fromEntries(argumentKeys.map((key) => [key, {}]));
-	const inputSchema: ProxyToolInputSchema = {
-		type: 'object',
-		properties: {
-			...existingProperties,
-			...discoveredProperties,
-		},
-	};
-	const definition: ProxyToolDefinition = {
-		...parentConfig,
-		toolName,
-		upstreamToolName: toolName,
-		description: `FastMCP app backend action discovered from ${parentConfig.toolName}.`,
-		inputSchema,
-		meta: {
-			visibility: ['app'],
-			hfProxy: {
-				discoveredFrom: parentConfig.toolName,
-				upstreamToolName: toolName,
-			},
-		},
-	};
-
-	cachedTools = cachedTools ?? [];
-	const index = cachedTools.findIndex((tool) => tool.toolName === toolName);
-	if (index === -1) {
-		cachedTools.push(definition);
-	} else {
-		cachedTools[index] = definition;
-	}
-	cachedToolsByName.set(toolName, definition);
-	return definition;
 }
 
 export async function loadProxyToolsConfig(): Promise<ProxyToolDefinition[]> {
@@ -111,12 +63,11 @@ export async function loadProxyToolsConfig(): Promise<ProxyToolDefinition[]> {
 		const source = process.env[PROXY_TOOLS_ENV_VAR]?.trim();
 		if (!source) {
 			cachedTools = [];
-			cachedToolsByName = new Map();
 			logger.debug({ envVar: PROXY_TOOLS_ENV_VAR }, 'Proxy tools CSV not configured');
 			return cachedTools;
 		}
 
-		let content: string | null = null;
+		let content: string;
 		if (source.startsWith('https://')) {
 			try {
 				const { response } = await fetchWithProfile(source, PROXY_CSV_SOURCE_PROFILE, {
@@ -125,14 +76,12 @@ export async function loadProxyToolsConfig(): Promise<ProxyToolDefinition[]> {
 				if (!response.ok) {
 					logger.error({ status: response.status, source }, 'Failed to fetch proxy tools CSV');
 					cachedTools = [];
-					cachedToolsByName = new Map();
 					return cachedTools;
 				}
 				content = await response.text();
 			} catch (error) {
 				logger.error({ error, source }, 'Error fetching proxy tools CSV');
 				cachedTools = [];
-				cachedToolsByName = new Map();
 				return cachedTools;
 			}
 		} else {
@@ -141,7 +90,6 @@ export async function loadProxyToolsConfig(): Promise<ProxyToolDefinition[]> {
 			} catch (error) {
 				logger.error({ error, source }, 'Proxy tools CSV file not found');
 				cachedTools = [];
-				cachedToolsByName = new Map();
 				return cachedTools;
 			}
 		}
@@ -152,18 +100,11 @@ export async function loadProxyToolsConfig(): Promise<ProxyToolDefinition[]> {
 			logger.error('Proxy tools configured but no tool schemas were loaded');
 		}
 		cachedTools = toolDefinitions;
-		cachedToolsByName = new Map(toolDefinitions.map((entry) => [entry.toolName, entry]));
 		logger.info({ toolCount: toolDefinitions.length }, 'Loaded proxy tools configuration');
 		return toolDefinitions;
 	})();
 
 	return cachedConfigPromise;
-}
-
-export function resetProxyToolsConfigForTest(): void {
-	cachedTools = null;
-	cachedConfigPromise = null;
-	cachedToolsByName = new Map();
 }
 
 async function loadProxyToolSchemas(sources: ProxyToolSource[]): Promise<ProxyToolDefinition[]> {
@@ -213,13 +154,7 @@ async function fetchProxyToolSchemas(
 		}
 
 		return tools
-			.map((tool) =>
-				buildProxyToolDefinition(
-					source,
-					tool,
-					tools.length === 1 ? source.proxyId : tool.name
-				)
-			)
+			.map((tool) => buildProxyToolDefinition(source, tool, tools.length === 1 ? source.proxyId : tool.name))
 			.filter((tool): tool is ProxyToolDefinition => Boolean(tool));
 	} catch (error) {
 		logger.error({ error, proxyId: source.proxyId, url: source.url }, 'Proxy tool schema fetch failed');
@@ -233,11 +168,7 @@ async function fetchProxyToolSchemas(
 	}
 }
 
-function buildProxyToolDefinition(
-	source: ProxyToolSource,
-	tool: Tool,
-	toolName: string
-): ProxyToolDefinition | null {
+function buildProxyToolDefinition(source: ProxyToolSource, tool: Tool, toolName: string): ProxyToolDefinition | null {
 	const inputSchema = tool.inputSchema as ProxyToolInputSchema | undefined;
 	if (!inputSchema || inputSchema.type !== 'object') {
 		logger.error({ proxyId: source.proxyId, toolName: tool.name }, 'Proxy tool schema missing or invalid');
@@ -249,7 +180,6 @@ function buildProxyToolDefinition(
 		toolName,
 		upstreamToolName: tool.name,
 		url: source.url,
-		responseType: source.responseType,
 		description: tool.description,
 		inputSchema,
 		meta: tool._meta,

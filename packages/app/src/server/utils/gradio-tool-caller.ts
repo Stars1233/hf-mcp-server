@@ -1,10 +1,7 @@
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { type ServerNotification, type ServerRequest } from '@modelcontextprotocol/sdk/types.js';
-import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js';
+import type { CallToolResult, Progress } from '@modelcontextprotocol/server';
 import { callGradioToolWithHeaders } from '@llmindset/hf-mcp';
 import { logger } from './logger.js';
 import { stripImageContentFromResult, extractUrlFromContent } from './gradio-result-processor.js';
-import { gradioMetrics, getMetricsSafeName } from './gradio-metrics.js';
 
 /**
  * Options for calling a Gradio tool
@@ -32,7 +29,6 @@ export interface GradioToolCallOptions {
  * Unified Gradio tool caller that handles:
  * - Streamable HTTP connection management
  * - MCP tool invocation
- * - Progress notification relay
  *
  * Returns the raw MCP result without post-processing. Callers should apply
  * image filtering and OpenAI-specific transforms as needed using applyResultPostProcessing.
@@ -45,24 +41,14 @@ export async function callGradioTool(
 	toolName: string,
 	parameters: Record<string, unknown>,
 	hfToken: string | undefined,
-	extra: RequestHandlerExtra<ServerRequest, ServerNotification> | undefined
+	onProgress?: (progress: Progress) => void | Promise<void>
 ): Promise<CallToolResult> {
 	logger.info({ tool: toolName, params: parameters }, 'Calling Gradio tool via unified caller');
 
-	const metricsToolName = getMetricsSafeName(toolName);
-
-	// Call the remote tool via shared helper (handles Streamable HTTP, progress relay, header capture)
-	const { result, capturedHeaders } = await callGradioToolWithHeaders(
-		mcpUrl,
-		toolName,
-		parameters,
-		hfToken,
-		extra,
-		{
-			logProxiedReplica: true,
-			onProgressRelayFailure: () => gradioMetrics.recordProgressRelayFailure(metricsToolName),
-		}
-	);
+	const { result, capturedHeaders } = await callGradioToolWithHeaders(mcpUrl, toolName, parameters, hfToken, {
+		logProxiedReplica: true,
+		onProgress,
+	});
 
 	// Attach captured headers (e.g., X-Proxied-Replica) to the result meta so callers can inspect them
 	const proxiedReplica = capturedHeaders['x-proxied-replica'];
@@ -88,13 +74,9 @@ export async function callGradioTool(
  * - Image content filtering (conditionally)
  * - OpenAI-specific structured content
  *
- * This should be called after any custom transformations (like _mcpui handling)
- * to ensure consistent behavior across all Gradio tools.
+ * This ensures consistent behavior across all Gradio tools.
  */
-export function applyResultPostProcessing(
-	result: CallToolResult,
-	options: GradioToolCallOptions
-): CallToolResult {
+export function applyResultPostProcessing(result: CallToolResult, options: GradioToolCallOptions): CallToolResult {
 	// Strip image content if requested
 	const filteredResult = stripImageContentFromResult(result, {
 		enabled: !!options.stripImageContent,
@@ -107,9 +89,11 @@ export function applyResultPostProcessing(
 		const extractedUrl = extractUrlFromContent(filteredResult.content);
 		if (extractedUrl) {
 			logger.debug({ tool: options.toolName, url: extractedUrl }, 'Setting structuredContent with extracted URL');
-			(filteredResult as CallToolResult & {
-				structuredContent?: { url: string; spaceName?: string };
-			}).structuredContent = {
+			(
+				filteredResult as CallToolResult & {
+					structuredContent?: { url: string; spaceName?: string };
+				}
+			).structuredContent = {
 				url: extractedUrl,
 				spaceName: options.spaceName,
 			};
