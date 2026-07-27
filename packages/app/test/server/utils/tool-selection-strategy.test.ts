@@ -108,6 +108,19 @@ describe('extractBouquetAndMix', () => {
 
 		expect(result.hfToken).toBe('hf_request_token');
 	});
+
+	it.each(['bearer', 'BEARER', 'BeArEr'])('should parse the %s authorization scheme case-insensitively', (scheme) => {
+		const result = extractAuthBouquetAndMix({ authorization: `${scheme} hf_request_token` });
+
+		expect(result.hfToken).toBe('hf_request_token');
+	});
+
+	it.each(['Bearer', 'Bearer ', 'Basic hf_request_token', 'Bearer token extra'])(
+		'should ignore malformed authorization value %j',
+		(authorization) => {
+			expect(extractAuthBouquetAndMix({ authorization }).hfToken).toBeUndefined();
+		}
+	);
 });
 
 describe('BOUQUETS configuration', () => {
