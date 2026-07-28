@@ -10,6 +10,10 @@ import {
 } from './tool-ids.js';
 
 describe('built-in tool IDs', () => {
+	it('uses the tool ID exposed by the upstream MCP settings API', () => {
+		expect(CREATE_REPO_TOOL_ID).toBe('create_repo');
+	});
+
 	it('contains the supported core tool surface', () => {
 		expect(ALL_BUILTIN_TOOL_IDS).toEqual(
 			expect.arrayContaining([

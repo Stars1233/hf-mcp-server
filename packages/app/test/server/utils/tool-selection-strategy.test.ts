@@ -521,6 +521,20 @@ describe('ToolSelectionStrategy', () => {
 	});
 
 	describe('User Settings Mode (Third Precedence)', () => {
+		it('accepts the upstream create_repo configuration ID', async () => {
+			const result = await strategy.selectTools({
+				headers: {},
+				userSettings: {
+					builtInTools: ['create_repo'],
+					spaceTools: [],
+				},
+				hfToken: 'test-token',
+			});
+
+			expect(CREATE_REPO_TOOL_ID).toBe('create_repo');
+			expect(result.enabledToolIds).toEqual([CREATE_REPO_TOOL_ID, HF_FS_TOOL_ID]);
+		});
+
 		it('ignores retired and unknown configuration IDs', async () => {
 			const result = await strategy.selectTools({
 				headers: {},
