@@ -108,6 +108,19 @@ describe('extractBouquetAndMix', () => {
 
 		expect(result.hfToken).toBe('hf_request_token');
 	});
+
+	it.each(['bearer', 'BEARER', 'BeArEr'])('should parse the %s authorization scheme case-insensitively', (scheme) => {
+		const result = extractAuthBouquetAndMix({ authorization: `${scheme} hf_request_token` });
+
+		expect(result.hfToken).toBe('hf_request_token');
+	});
+
+	it.each(['Bearer', 'Bearer ', 'Basic hf_request_token', 'Bearer token extra'])(
+		'should ignore malformed authorization value %j',
+		(authorization) => {
+			expect(extractAuthBouquetAndMix({ authorization }).hfToken).toBeUndefined();
+		}
+	);
 });
 
 describe('BOUQUETS configuration', () => {
@@ -521,6 +534,20 @@ describe('ToolSelectionStrategy', () => {
 	});
 
 	describe('User Settings Mode (Third Precedence)', () => {
+		it('accepts the upstream create_repo configuration ID', async () => {
+			const result = await strategy.selectTools({
+				headers: {},
+				userSettings: {
+					builtInTools: ['create_repo'],
+					spaceTools: [],
+				},
+				hfToken: 'test-token',
+			});
+
+			expect(CREATE_REPO_TOOL_ID).toBe('create_repo');
+			expect(result.enabledToolIds).toEqual([CREATE_REPO_TOOL_ID, HF_FS_TOOL_ID]);
+		});
+
 		it('ignores retired and unknown configuration IDs', async () => {
 			const result = await strategy.selectTools({
 				headers: {},

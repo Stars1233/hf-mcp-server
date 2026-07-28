@@ -127,6 +127,17 @@ export abstract class BaseTransport {
 		this.metrics.trackClientProtocol(clientInfo, era, version);
 	}
 
+	protected trackProtocolToolCall(
+		method: string | null,
+		era: ProtocolEra,
+		version: string,
+		clientInfo?: { name: string; version: string }
+	): void {
+		if (method?.startsWith('tools/call:')) {
+			this.metrics.trackProtocolToolCall(era, version, clientInfo);
+		}
+	}
+
 	protected trackAuthenticatedUser(
 		username: string | undefined,
 		era: ProtocolEra,

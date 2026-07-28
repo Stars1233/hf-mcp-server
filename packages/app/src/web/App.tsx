@@ -30,8 +30,9 @@ function App() {
 		revalidateOnReconnect: true,
 	});
 
-	// Use SWR for sessions to trigger stdioClient update
-	useSWR('/api/sessions', fetcher, {
+	// Only STDIO needs the session endpoint to populate stdioClient. HTTP
+	// dashboards use aggregate counters from transport metrics.
+	useSWR(transportInfo?.transport === 'stdio' ? '/api/sessions' : null, fetcher, {
 		refreshInterval: 3000, // Refresh every 3 seconds
 		revalidateOnFocus: true,
 	});

@@ -495,6 +495,7 @@ export class StatelessHttpTransport extends BaseTransport {
 			protocolVersion,
 			clientInfo
 		);
+		this.trackProtocolToolCall(trackingName, 'modern', protocolVersion, clientInfo);
 
 		if (requestBody?.method === 'server/discover') {
 			logSystemEvent('server_discover', requestId, {
@@ -646,6 +647,7 @@ export class StatelessHttpTransport extends BaseTransport {
 			this.updateClientActivity(protocolClientInfo);
 			this.trackClientProtocol(protocolClientInfo, 'legacy', protocolVersion);
 		}
+		this.trackProtocolToolCall(trackingName, 'legacy', protocolVersion, protocolClientInfo);
 
 		if (rpcMethod && UNSUPPORTED_PROMPT_METHODS.has(rpcMethod)) {
 			const promptSessionId = headers['mcp-session-id'];

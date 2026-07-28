@@ -81,6 +81,36 @@ describe('MetricsCounter', () => {
 		});
 	});
 
+	it('attributes tool calls to the exact protocol used by a client', () => {
+		const metrics = new MetricsCounter();
+		const client = { name: 'mcp', version: '0.1.0' };
+		metrics.associateSessionWithClient(client);
+
+		for (const protocolVersion of ['2025-06-18', '2025-11-25']) {
+			metrics.trackProtocolRequest('legacy', protocolVersion);
+			metrics.trackClientProtocol(client, 'legacy', protocolVersion);
+		}
+		metrics.trackProtocolToolCall('legacy', '2025-11-25', client);
+		metrics.trackProtocolToolCall('legacy', '2025-11-25', client);
+		metrics.trackProtocolToolCall('legacy', '2025-06-18', client);
+
+		const response = formatMetricsForAPI(metrics.getMetrics(), 'streamableHttpJson', true);
+		const protocols = response.clients[0]?.protocols;
+
+		expect(protocols).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ version: '2025-11-25', requestCount: 1, toolCallCount: 2 }),
+				expect.objectContaining({ version: '2025-06-18', requestCount: 1, toolCallCount: 1 }),
+			])
+		);
+		expect(response.protocolVersions).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ version: '2025-11-25', toolCallCount: 2 }),
+				expect.objectContaining({ version: '2025-06-18', toolCallCount: 1 }),
+			])
+		);
+	});
+
 	it('bounds unexpected protocol-version cardinality', () => {
 		const metrics = new MetricsCounter();
 		for (let index = 0; index < 40; index++) {

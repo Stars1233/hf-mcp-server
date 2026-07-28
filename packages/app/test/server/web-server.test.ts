@@ -1,6 +1,8 @@
 import { createServer, type Server } from 'node:http';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebServer } from '../../src/server/web-server.js';
+import type { BaseTransport, SessionMetadata } from '../../src/server/transport/base-transport.js';
+import { MetricsCounter } from '../../src/shared/transport-metrics.js';
 
 function listen(server: Server): Promise<void> {
 	return new Promise((resolve, reject) => {
@@ -18,6 +20,15 @@ function close(server: Server): Promise<void> {
 			else resolve();
 		});
 	});
+}
+
+function webServerPort(webServer: WebServer): number {
+	const server = (webServer as unknown as { server: Server | null }).server;
+	const address = server?.address();
+	if (!address || typeof address === 'string') {
+		throw new Error('Expected WebServer to listen on a TCP port');
+	}
+	return address.port;
 }
 
 describe('WebServer', () => {
@@ -47,4 +58,69 @@ describe('WebServer', () => {
 		await expect(webServer.start(address.port)).rejects.toMatchObject({ code: 'EADDRINUSE' });
 		await expect(webServer.start(0)).resolves.toBeUndefined();
 	});
+
+	it('omits analytics session details from stateless transport metrics', async () => {
+		const webServer = new WebServer();
+		webServers.push(webServer);
+		const getSessions = vi.fn(() => [testSession()]);
+		webServer.setTransport(
+			{
+				getMetrics: () => new MetricsCounter().getMetrics(),
+				getSessions,
+			} as unknown as BaseTransport
+		);
+		webServer.setTransportInfo({
+			transport: 'streamableHttpJson',
+			defaultHfTokenSet: false,
+			externalApiMode: false,
+			stdioClient: null,
+		});
+		webServer.setupApiRoutes();
+		await webServer.start(0);
+
+		const response = await fetch(`http://localhost:${webServerPort(webServer).toString()}/api/transport-metrics`);
+		const body = (await response.json()) as { sessions?: unknown[] };
+
+		expect(response.status).toBe(200);
+		expect(body.sessions).toEqual([]);
+		expect(getSessions).not.toHaveBeenCalled();
+	});
+
+	it('retains session details in STDIO transport metrics', async () => {
+		const webServer = new WebServer();
+		webServers.push(webServer);
+		const getSessions = vi.fn(() => [testSession()]);
+		webServer.setTransport(
+			{
+				getMetrics: () => new MetricsCounter().getMetrics(),
+				getSessions,
+			} as unknown as BaseTransport
+		);
+		webServer.setTransportInfo({
+			transport: 'stdio',
+			defaultHfTokenSet: false,
+			externalApiMode: false,
+			stdioClient: null,
+		});
+		webServer.setupApiRoutes();
+		await webServer.start(0);
+
+		const response = await fetch(`http://localhost:${webServerPort(webServer).toString()}/api/transport-metrics`);
+		const body = (await response.json()) as { sessions?: Array<{ id: string }> };
+
+		expect(response.status).toBe(200);
+		expect(body.sessions).toEqual([expect.objectContaining({ id: 'session-1' })]);
+		expect(getSessions).toHaveBeenCalledOnce();
+	});
 });
+
+function testSession(): SessionMetadata {
+	return {
+		id: 'session-1',
+		connectedAt: new Date('2026-07-28T00:00:00.000Z'),
+		lastActivity: new Date(),
+		requestCount: 3,
+		isAuthenticated: false,
+		capabilities: {},
+	};
+}
