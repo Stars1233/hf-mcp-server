@@ -8,27 +8,17 @@ import { MetricTile, SectionHeader } from './DashboardPrimitives';
 import { formatCompactNumber } from '../lib/dashboard-utils';
 import type { TransportMetricsResponse } from '../../shared/transport-metrics.js';
 
-type ClientData = {
-	name: string;
-	version: string;
+type ClientMetric = TransportMetricsResponse['clients'][number];
+type ClientProtocolMetric = ClientMetric['protocols'][number];
+type ClientProtocolData = Omit<
+	ClientMetric,
+	'protocols' | 'requestCount' | 'toolCallCount' | 'firstSeen' | 'lastSeen'
+> & {
+	protocol: ClientProtocolMetric;
 	requestCount: number;
-	activeConnections: number;
-	totalConnections: number;
-	isConnected: boolean;
-	lastSeen: string;
-	firstSeen: string;
 	toolCallCount: number;
-	newIpCount: number;
-	anonCount: number;
-	uniqueAuthCount: number;
-	uniqueUserCount: number;
-	protocols: Array<{
-		era: 'legacy' | 'modern';
-		version: string;
-		requestCount: number;
-		firstSeen: string;
-		lastSeen: string;
-	}>;
+	firstSeen: string;
+	lastSeen: string;
 };
 
 /**
@@ -89,7 +79,17 @@ interface StatelessTransportMetricsProps {
 }
 
 export function StatelessTransportMetrics({ metrics }: StatelessTransportMetricsProps) {
-	const clientData = metrics.clients;
+	const clientData: ClientProtocolData[] = metrics.clients.flatMap((client) => {
+		const { protocols, ...clientTotals } = client;
+		return protocols.map((protocol) => ({
+			...clientTotals,
+			protocol,
+			requestCount: protocol.requestCount,
+			toolCallCount: protocol.toolCallCount,
+			firstSeen: protocol.firstSeen,
+			lastSeen: protocol.lastSeen,
+		}));
+	});
 	const protocolRequestTotal = metrics.protocolEras.legacy + metrics.protocolEras.modern;
 	const modernShare =
 		protocolRequestTotal === 0 ? 0 : Math.round((metrics.protocolEras.modern / protocolRequestTotal) * 100);
@@ -100,17 +100,15 @@ export function StatelessTransportMetrics({ metrics }: StatelessTransportMetrics
 	const recentClients = metrics.clients.filter((client) => isRecentlyActive(client.lastSeen)).length;
 	const protocolFilterOptions = Array.from(
 		new Map(
-			metrics.clients.flatMap((client) =>
-				client.protocols.map((protocol) => {
-					const value = `${protocol.era}:${protocol.version}`;
-					return [value, { value, label: `${protocol.era} · ${protocol.version}` }] as const;
-				})
-			)
+			clientData.map((client) => {
+				const value = `${client.protocol.era}:${client.protocol.version}`;
+				return [value, { value, label: `${client.protocol.era} · ${client.protocol.version}` }] as const;
+			})
 		).values()
 	).sort((a, b) => b.value.localeCompare(a.value));
 
-	// Define columns for the client identities table
-	const createClientColumns = (): ColumnDef<ClientData>[] => [
+	// Define columns for exact client/protocol combinations.
+	const createClientColumns = (): ColumnDef<ClientProtocolData>[] => [
 		{
 			accessorKey: 'name',
 			header: createSortableHeader('Client'),
@@ -128,23 +126,18 @@ export function StatelessTransportMetrics({ metrics }: StatelessTransportMetrics
 			},
 		},
 		{
-			id: 'protocols',
+			id: 'protocol',
 			header: 'Protocol',
 			filterFn: (row, _columnId, filterValue: string) =>
-				row.original.protocols.some((protocol) => `${protocol.era}:${protocol.version}` === filterValue),
-			cell: ({ row }) => (
-				<div className="flex flex-col gap-1">
-					{row.original.protocols.map((protocol) => (
-						<Badge
-							key={`${protocol.era}:${protocol.version}`}
-							variant={protocol.era === 'modern' ? 'success' : 'secondary'}
-							title={`${protocol.requestCount} requests`}
-						>
-							{protocol.era} · {protocol.version}
-						</Badge>
-					))}
-				</div>
-			),
+				`${row.original.protocol.era}:${row.original.protocol.version}` === filterValue,
+			cell: ({ row }) => {
+				const protocol = row.original.protocol;
+				return (
+					<Badge variant={protocol.era === 'modern' ? 'success' : 'secondary'}>
+						{protocol.era} · {protocol.version}
+					</Badge>
+				);
+			},
 		},
 		{
 			accessorKey: 'requestCount',
@@ -158,16 +151,20 @@ export function StatelessTransportMetrics({ metrics }: StatelessTransportMetrics
 		},
 		{
 			accessorKey: 'newIpCount',
-			header: createSortableHeader('New IPs', 'right'),
-			cell: ({ row }) => <div className="text-right font-mono text-sm">{row.getValue<number>('newIpCount')}</div>,
+			header: createSortableHeader('Client New IPs', 'right'),
+			cell: ({ row }) => (
+				<div className="text-right font-mono text-sm" title="Client-wide total across all protocol versions">
+					{row.getValue<number>('newIpCount')}
+				</div>
+			),
 		},
 		{
 			accessorKey: 'anonCount',
-			header: createSortableHeader('Anon/Tokens/Users', 'right'),
+			header: createSortableHeader('Client Anon/Tokens/Users', 'right'),
 			cell: ({ row }) => {
 				const client = row.original;
 				return (
-					<div className="text-right font-mono text-sm">
+					<div className="text-right font-mono text-sm" title="Client-wide totals across all protocol versions">
 						{client.anonCount}/{client.uniqueAuthCount}/{client.uniqueUserCount}
 					</div>
 				);
@@ -312,7 +309,7 @@ export function StatelessTransportMetrics({ metrics }: StatelessTransportMetrics
 				<CardContent>
 					<SectionHeader
 						title="Client implementations"
-						description="Live protocol adoption, activity, authentication, and tool usage by client."
+						description="One row per implementation and exact protocol version, with protocol-attributed requests and tool calls."
 					/>
 					<DataTable
 						columns={createClientColumns()}
@@ -320,7 +317,7 @@ export function StatelessTransportMetrics({ metrics }: StatelessTransportMetrics
 						searchColumn="name"
 						searchPlaceholder="Filter clients..."
 						facetFilter={{
-							column: 'protocols',
+							column: 'protocol',
 							label: 'All protocol versions',
 							options: protocolFilterOptions,
 						}}

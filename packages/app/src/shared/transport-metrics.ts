@@ -7,6 +7,7 @@ interface ProtocolUsageMetrics {
 	era: ProtocolEra;
 	version: string;
 	requestCount: number;
+	toolCallCount: number;
 	firstSeen: Date;
 	lastSeen: Date;
 }
@@ -200,6 +201,7 @@ export interface TransportMetricsResponse {
 		era: ProtocolEra;
 		version: string;
 		requestCount: number;
+		toolCallCount: number;
 		uniqueClients: number;
 		uniqueUsers: number;
 		unattributedRequests: number;
@@ -266,6 +268,7 @@ export interface TransportMetricsResponse {
 			era: ProtocolEra;
 			version: string;
 			requestCount: number;
+			toolCallCount: number;
 			firstSeen: string;
 			lastSeen: string;
 		}>;
@@ -563,6 +566,7 @@ export class MetricsCounter {
 			era,
 			version: normalizedVersion,
 			requestCount: 1,
+			toolCallCount: 0,
 			uniqueClients: 0,
 			uniqueUsers: 0,
 			unattributedRequests: 1,
@@ -590,6 +594,7 @@ export class MetricsCounter {
 				era,
 				version: normalizedVersion,
 				requestCount: 1,
+				toolCallCount: 0,
 				firstSeen: new Date(),
 				lastSeen: new Date(),
 			});
@@ -606,6 +611,25 @@ export class MetricsCounter {
 			aggregate.uniqueClients = clients.size;
 			aggregate.unattributedRequests = Math.max(0, aggregate.unattributedRequests - 1);
 		}
+	}
+
+	/**
+	 * Attribute a tool call to the exact protocol revision used for the request.
+	 */
+	trackProtocolToolCall(
+		era: ProtocolEra,
+		version: string,
+		clientInfo?: { name: string; version: string }
+	): void {
+		const normalizedVersion = this.normalizeProtocolVersion(era, version);
+		const protocolKey = getProtocolKey(era, normalizedVersion);
+		const aggregate = this.metrics.protocolVersions.get(protocolKey);
+		if (aggregate) aggregate.toolCallCount++;
+
+		if (!clientInfo) return;
+		const clientKey = getClientKey(clientInfo.name, clientInfo.version);
+		const clientProtocol = this.metrics.clients.get(clientKey)?.protocols.get(protocolKey);
+		if (clientProtocol) clientProtocol.toolCallCount++;
 	}
 
 	/**
