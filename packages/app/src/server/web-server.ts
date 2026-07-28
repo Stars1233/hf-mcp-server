@@ -259,24 +259,27 @@ export class WebServer {
 				// Determine if transport is stateless
 				const isStateless = this.transportInfo.transport === 'streamableHttpJson';
 
-				// Get sessions (empty for stateless transports)
-				const sessions = this.transport.getSessions().map((session) => {
-					const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
-					const hasRecentActivity = session.lastActivity > fiveMinutesAgo;
+				// Stateless dashboards use aggregate lifecycle counters. Do not copy and
+				// serialize the unbounded analytics-session map on every metrics poll.
+				const sessions = isStateless
+					? []
+					: this.transport.getSessions().map((session) => {
+							const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+							const hasRecentActivity = session.lastActivity > fiveMinutesAgo;
 
-					return {
-						id: session.id,
-						connectedAt: session.connectedAt.toISOString(),
-						lastActivity: session.lastActivity.toISOString(),
-						requestCount: session.requestCount,
-						clientInfo: session.clientInfo,
-						isConnected: hasRecentActivity,
-						connectionStatus: hasRecentActivity ? ('Connected' as const) : ('Disconnected' as const),
-						ipAddress: session.ipAddress,
-						protocolEra: session.protocolEra,
-						protocolVersion: session.protocolVersion,
-					};
-				});
+							return {
+								id: session.id,
+								connectedAt: session.connectedAt.toISOString(),
+								lastActivity: session.lastActivity.toISOString(),
+								requestCount: session.requestCount,
+								clientInfo: session.clientInfo,
+								isConnected: hasRecentActivity,
+								connectionStatus: hasRecentActivity ? ('Connected' as const) : ('Disconnected' as const),
+								ipAddress: session.ipAddress,
+								protocolEra: session.protocolEra,
+								protocolVersion: session.protocolVersion,
+							};
+						});
 
 				// Format for API response
 				const formattedMetrics = formatMetricsForAPI(metrics, this.transportInfo.transport, isStateless, sessions);
