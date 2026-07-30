@@ -218,7 +218,7 @@ describe('HfSandboxTool', () => {
 		expect(onProgress).toHaveBeenCalledWith(
 			expect.objectContaining({
 				event: 'create',
-				message: expect.stringMatching(/checking startup health \(attempt 1\)/),
+				message: expect.stringMatching(/\(step 1\)/),
 			})
 		);
 		expect(onProgress).toHaveBeenCalledWith(

@@ -1,5 +1,6 @@
 import type { ServerContext } from '@modelcontextprotocol/server';
 import { logger } from './logger.js';
+import { isProgressToken } from './progress-token.js';
 
 interface ProgressUpdate {
 	progress?: number;
@@ -15,7 +16,7 @@ export function createProgressRelay(extra: ServerContext | undefined): ProgressR
 	}
 
 	const progressToken = extra.mcpReq._meta?.progressToken;
-	if (progressToken === undefined || (typeof progressToken !== 'number' && typeof progressToken !== 'string')) {
+	if (!isProgressToken(progressToken)) {
 		return undefined;
 	}
 

@@ -85,6 +85,38 @@ describe('StatelessHttpTransport', () => {
 		}
 	});
 
+	describe('requestsProgress', () => {
+		it.each(['progress-token', 42])('accepts valid progress token %j', (progressToken) => {
+			expect(
+				(transport as any).requestsProgress({
+					method: 'tools/call',
+					params: { _meta: { progressToken } },
+				})
+			).toBe(true);
+		});
+
+		it.each([undefined, null, true, 1.5, Number.NaN, Number.POSITIVE_INFINITY, {}, []])(
+			'rejects missing or invalid progress token %j',
+			(progressToken) => {
+				expect(
+					(transport as any).requestsProgress({
+						method: 'tools/call',
+						params: { _meta: { progressToken } },
+					})
+				).toBe(false);
+			}
+		);
+
+		it('only enables progress streaming for tool calls', () => {
+			expect(
+				(transport as any).requestsProgress({
+					method: 'resources/read',
+					params: { _meta: { progressToken: 'progress-token' } },
+				})
+			).toBe(false);
+		});
+	});
+
 	describe('shouldHandle', () => {
 		it('should handle tools/list requests', () => {
 			const result = (transport as any).shouldHandle({ method: 'tools/list' });

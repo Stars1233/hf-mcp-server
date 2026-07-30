@@ -31,6 +31,7 @@ import { RESOURCES_DIRECTORY_READ_METHOD } from '../skills/skill-directory-schem
 import { getProxyToolsConfig } from '../utils/proxy-tools-config.js';
 import { BOUQUET_FALLBACK } from '../../shared/settings.js';
 import { getErrorLogFields } from '../utils/observability.js';
+import { isProgressToken } from '../utils/progress-token.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -197,7 +198,7 @@ export class StatelessHttpTransport extends BaseTransport {
 	private requestsProgress(requestBody: unknown): boolean {
 		const body = requestBody as { method?: unknown; params?: { _meta?: { progressToken?: unknown } } } | undefined;
 		const token = body?.params?._meta?.progressToken;
-		return body?.method === 'tools/call' && (typeof token === 'number' || typeof token === 'string');
+		return body?.method === 'tools/call' && isProgressToken(token);
 	}
 
 	private hasProxyAppResources(): boolean {

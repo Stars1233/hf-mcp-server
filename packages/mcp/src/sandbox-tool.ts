@@ -1049,7 +1049,7 @@ export class HfSandboxTool extends SandboxToolBase {
 			attempt += 1;
 			await notifySandboxProgress(options, {
 				event: 'create',
-				message: `Creating sandbox ${name}: checking startup health (attempt ${String(attempt)}).`,
+				message: `Creating sandbox ${name}: (step ${String(attempt)}).`,
 			});
 			try {
 				const health = normalizeSandboxHealth(
