@@ -294,7 +294,7 @@ describe('StatelessHttpTransport', () => {
 	});
 
 	describe('production request path', () => {
-		it('rejects modern subscription listeners instead of opening a persistent stream', async () => {
+		it('rejects modern subscription listeners through the configured SDK limit', async () => {
 			const app = express();
 			app.use(express.json());
 			const serverFactory: ServerFactory = vi.fn(async () => ({
@@ -323,7 +323,7 @@ describe('StatelessHttpTransport', () => {
 				await client.connect(clientTransport);
 				const factoryCallsBeforeListen = vi.mocked(serverFactory).mock.calls.length;
 
-				await expect(client.listen({})).rejects.toThrow('subscriptions/listen is not supported');
+				await expect(client.listen({})).rejects.toThrow('Subscription limit reached');
 
 				expect(vi.mocked(serverFactory).mock.calls).toHaveLength(factoryCallsBeforeListen);
 				expect(transport.getMetrics().methods.get('subscriptions/listen')).toMatchObject({ count: 1, errors: 1 });
