@@ -38,6 +38,7 @@ interface ProxyToolSchemaProperty {
 }
 
 const PROXY_TOOLS_ENV_VAR = 'PROXY_TOOLS_CSV';
+const PROXY_TOKEN_ENV_VAR = 'PROXY_TOKEN';
 const VALID_RESPONSE_TYPES = new Set<ProxyToolResponseType>(['JSON', 'SSE']);
 const PROXY_SCHEMA_TIMEOUT_MS = 10_000;
 
@@ -112,7 +113,7 @@ async function loadProxyToolSchemas(sources: ProxyToolSource[]): Promise<ProxyTo
 		return [];
 	}
 
-	const hfToken = process.env.DEFAULT_HF_TOKEN || process.env.HF_TOKEN || process.env.LOGGING_HF_TOKEN;
+	const hfToken = getProxyToken();
 	const schemaTasks = sources.map((source) =>
 		Promise.race([fetchProxyToolSchemas(source, hfToken), createTimeout(PROXY_SCHEMA_TIMEOUT_MS)])
 			.then((tools) => ({ source, tools }))
@@ -124,6 +125,10 @@ async function loadProxyToolSchemas(sources: ProxyToolSource[]): Promise<ProxyTo
 
 	const results = await Promise.all(schemaTasks);
 	return results.flatMap((result) => result.tools);
+}
+
+export function getProxyToken(): string | undefined {
+	return process.env[PROXY_TOKEN_ENV_VAR];
 }
 
 async function fetchProxyToolSchemas(

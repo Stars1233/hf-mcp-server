@@ -174,21 +174,18 @@ describe('HfDatasetLogger', () => {
 			expect(attemptCount).toBe(2); // Two attempts made
 		});
 
-		it('should not allow concurrent uploads', async () => {
+		it('should serialize concurrent uploads without dropping newly buffered logs', async () => {
 			let uploadCallCount = 0;
+			const uploadResolvers: Array<(result: CommitOutput) => void> = [];
 			const slowUpload = (): Promise<CommitOutput> => {
 				uploadCallCount++;
 				return new Promise((resolve) => {
-					// Auto-resolve after 100ms to prevent hanging
-					setTimeout(
-						() =>
-							resolve({
-								commit: { url: 'test-url', oid: 'test-oid' },
-								hookOutput: 'test-hook-output',
-							}),
-						100
-					);
+					uploadResolvers.push(resolve);
 				});
+			};
+			const uploadResult: CommitOutput = {
+				commit: { url: 'test-url', oid: 'test-oid' },
+				hookOutput: 'test-hook-output',
 			};
 
 			logger = createTestLogger({ uploadFunction: slowUpload, batchSize: 1 });
@@ -196,21 +193,21 @@ describe('HfDatasetLogger', () => {
 			// Add log to trigger flush
 			logger.processLog({ level: 30, time: Date.now(), msg: 'Test 1' });
 
-			// Wait for upload to start
-			await new Promise((resolve) => setTimeout(resolve, 50));
-
-			// Verify upload is in progress
 			expect(logger.getStatus().uploadInProgress).toBe(true);
+			expect(uploadCallCount).toBe(1);
 
 			// Try to flush again while upload is in progress
 			logger.processLog({ level: 30, time: Date.now(), msg: 'Test 2' });
 			await (logger as unknown as { flush: () => Promise<void> }).flush();
-
-			// Wait for completion
-			await new Promise((resolve) => setTimeout(resolve, 150));
-
-			// Should have only one upload call
 			expect(uploadCallCount).toBe(1);
+
+			uploadResolvers[0]?.(uploadResult);
+			await new Promise((resolve) => setImmediate(resolve));
+
+			expect(uploadCallCount).toBe(2);
+			uploadResolvers[1]?.(uploadResult);
+			await new Promise((resolve) => setImmediate(resolve));
+			expect(logger.getStatus().bufferSize).toBe(0);
 		}, 3000);
 	});
 

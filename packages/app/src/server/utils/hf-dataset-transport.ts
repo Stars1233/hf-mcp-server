@@ -100,21 +100,29 @@ export class HfDatasetLogger {
 			return;
 		}
 
-		const logsToUpload = [...this.logBuffer];
+		// Detach the current batch so records received during the upload remain
+		// buffered for the next flush.
+		const logsToUpload = this.logBuffer.splice(0, this.logBuffer.length);
 		this.uploadInProgress = true;
+		let uploadSucceeded = false;
 
 		console.log(`[HF Dataset ${this.logType}] Starting upload of ${logsToUpload.length} logs`);
 
 		try {
 			await this.uploadLogs(logsToUpload);
-			// Only clear buffer after successful upload
-			this.logBuffer = [];
+			uploadSucceeded = true;
 			console.log(`[HF Dataset ${this.logType}] ✅ Uploaded ${logsToUpload.length} logs to ${this.datasetId}`);
 		} catch (error) {
-			// Keep logs in buffer for retry on next flush cycle
+			// Restore the failed batch ahead of records that arrived while it
+			// was uploading, while retaining the configured buffer bound.
+			this.logBuffer = [...logsToUpload, ...this.logBuffer].slice(-this.maxBufferSize);
 			console.error(`[HF Dataset ${this.logType}] ❌ Upload failed, will retry on next flush:`, error);
 		} finally {
 			this.uploadInProgress = false;
+		}
+
+		if (uploadSucceeded && this.logBuffer.length >= this.batchSize) {
+			void this.flush();
 		}
 	}
 
@@ -123,10 +131,14 @@ export class HfDatasetLogger {
 		const filename = `logs-${timestamp}-${this.sessionId}.jsonl`;
 
 		const dateFolder = new Date().toISOString().split('T')[0];
-		const folder = this.logType === 'Query' ? 'queries' 
-			: this.logType === 'System' ? 'sessions' 
-			: this.logType === 'Gradio' ? 'gradio'
-			: 'logs';
+		const folder =
+			this.logType === 'Query'
+				? 'queries'
+				: this.logType === 'System'
+					? 'sessions'
+					: this.logType === 'Gradio'
+						? 'gradio'
+						: 'logs';
 		const pathInRepo = `${folder}/${dateFolder}/${filename}`;
 
 		console.log(`[HF Dataset ${this.logType}] Uploading to path: ${pathInRepo}`);
