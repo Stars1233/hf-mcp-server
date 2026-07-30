@@ -240,7 +240,6 @@ export async function callGradioToolWithHeaders(
 	logger.trace('[gradio] connected streamable client', { mcpUrl: validatedMcpUrl.toString() });
 
 	try {
-		const progressToken = 'hf-mcp-server';
 		const requestOptions: RequestOptions = {
 			onprogress: (progress) => {
 				logger.trace('[gradio] upstream progress event', { toolName, progress });
@@ -259,7 +258,6 @@ export async function callGradioToolWithHeaders(
 				params: {
 					name: toolName,
 					arguments: parameters,
-					_meta: { progressToken },
 				},
 			},
 			requestOptions

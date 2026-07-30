@@ -39,10 +39,13 @@ describe('createProgressRelay', () => {
 		});
 	});
 
-	it.each([undefined, null, true, {}, []])('ignores missing or invalid token %j', (progressToken) => {
-		const extra = progressToken === undefined ? undefined : makeExtra(progressToken).extra;
-		expect(createProgressRelay(extra)).toBeUndefined();
-	});
+	it.each([undefined, null, true, 1.5, Number.NaN, Number.POSITIVE_INFINITY, {}, []])(
+		'ignores missing or invalid token %j',
+		(progressToken) => {
+			const extra = progressToken === undefined ? undefined : makeExtra(progressToken).extra;
+			expect(createProgressRelay(extra)).toBeUndefined();
+		}
+	);
 
 	it('uses a monotonically increasing fallback when progress is omitted', async () => {
 		const { extra, sendNotification } = makeExtra('token');

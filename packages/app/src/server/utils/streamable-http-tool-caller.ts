@@ -64,7 +64,6 @@ export async function callStreamableHttpTool(
 	logger.trace({ serverUrl }, 'Streamable proxy connected upstream');
 
 	try {
-		const progressToken = 'hf-mcp-server';
 		const requestOptions: RequestOptions = {
 			onprogress: (progress) => {
 				logger.trace({ serverUrl, toolName, progress }, 'Streamable proxy upstream progress event');
@@ -83,7 +82,6 @@ export async function callStreamableHttpTool(
 				params: {
 					name: toolName,
 					arguments: parameters,
-					_meta: { progressToken },
 				},
 			},
 			requestOptions

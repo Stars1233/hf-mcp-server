@@ -55,7 +55,6 @@ describe('callGradioToolWithHeaders progress handling', () => {
 				params: {
 					name: 'predict',
 					arguments: {},
-					_meta: { progressToken: 'hf-mcp-server' },
 				},
 			},
 			expect.objectContaining({

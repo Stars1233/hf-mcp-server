@@ -49,7 +49,6 @@ describe('callStreamableHttpTool', () => {
 				params: {
 					name: 'csv_tool',
 					arguments: {},
-					_meta: { progressToken: 'hf-mcp-server' },
 				},
 			},
 			expect.objectContaining({
