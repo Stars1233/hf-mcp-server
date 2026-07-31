@@ -106,10 +106,11 @@ export function summarizeSubscriptionRequest(method: SubscriptionMethod, params:
 	if (typeof params !== 'object' || params === null || Array.isArray(params) || !('notifications' in params)) {
 		return 'notifications:missing';
 	}
-	const notifications = params.notifications;
-	if (typeof notifications !== 'object' || notifications === null || Array.isArray(notifications)) {
+	const notificationValue = params.notifications;
+	if (typeof notificationValue !== 'object' || notificationValue === null || Array.isArray(notificationValue)) {
 		return 'notifications:invalid';
 	}
+	const notifications = notificationValue as Record<string, unknown>;
 
 	const parts: string[] = [];
 	for (const field of SUBSCRIPTION_BOOLEAN_FILTER_FIELDS) {
