@@ -32,6 +32,7 @@ import { getProxyToolsConfig } from '../utils/proxy-tools-config.js';
 import { BOUQUET_FALLBACK } from '../../shared/settings.js';
 import { getErrorLogFields } from '../utils/observability.js';
 import { isProgressToken } from '../utils/progress-token.js';
+import type { SubscriptionMethod } from '../../shared/transport-metrics.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -60,6 +61,7 @@ interface JsonRpcRequestBody {
 		capabilities?: unknown;
 		protocolVersion?: unknown;
 		name?: string;
+		notifications?: unknown;
 		_meta?: Record<string, unknown>;
 	};
 }
@@ -76,6 +78,60 @@ interface ModernRequestData {
 	protocolVersion: string;
 	clientCapabilities: Record<string, unknown>;
 	userHash?: string;
+}
+
+const SUBSCRIPTION_BOOLEAN_FILTER_FIELDS = ['toolsListChanged', 'promptsListChanged', 'resourcesListChanged'] as const;
+const SUBSCRIPTION_FILTER_FIELDS = new Set<string>([...SUBSCRIPTION_BOOLEAN_FILTER_FIELDS, 'resourceSubscriptions']);
+
+function resourceSubscriptionCountBucket(length: number): string {
+	if (length === 0) return '0';
+	if (length === 1) return '1';
+	if (length <= 10) return '2-10';
+	if (length <= 100) return '11-100';
+	return '101+';
+}
+
+/**
+ * Produce a low-cardinality summary of subscription intent. In particular,
+ * never retain resource URIs from the modern listen filter.
+ */
+export function summarizeSubscriptionRequest(method: SubscriptionMethod, params: unknown): string {
+	if (method !== 'subscriptions/listen') {
+		if (typeof params !== 'object' || params === null || Array.isArray(params) || !('uri' in params)) {
+			return 'uri:missing';
+		}
+		return typeof params.uri === 'string' ? 'uri:present' : 'uri:invalid';
+	}
+
+	if (typeof params !== 'object' || params === null || Array.isArray(params) || !('notifications' in params)) {
+		return 'notifications:missing';
+	}
+	const notifications = params.notifications;
+	if (typeof notifications !== 'object' || notifications === null || Array.isArray(notifications)) {
+		return 'notifications:invalid';
+	}
+
+	const parts: string[] = [];
+	for (const field of SUBSCRIPTION_BOOLEAN_FILTER_FIELDS) {
+		if (!(field in notifications)) continue;
+		const value = notifications[field];
+		parts.push(`${field}:${typeof value === 'boolean' ? String(value) : 'invalid'}`);
+	}
+
+	if ('resourceSubscriptions' in notifications) {
+		const subscriptions = notifications.resourceSubscriptions;
+		if (Array.isArray(subscriptions) && subscriptions.every((uri) => typeof uri === 'string')) {
+			parts.push(`resourceSubscriptions:${resourceSubscriptionCountBucket(subscriptions.length)}`);
+		} else {
+			parts.push('resourceSubscriptions:invalid');
+		}
+	}
+
+	if (Object.keys(notifications).some((field) => !SUBSCRIPTION_FILTER_FIELDS.has(field))) {
+		parts.push('unknownFields:present');
+	}
+
+	return parts.length > 0 ? `notifications:${parts.join(',')}` : 'notifications:empty';
 }
 
 function isErrorResponseBody(body: string): boolean {
@@ -159,6 +215,23 @@ export class StatelessHttpTransport extends BaseTransport {
 	private readonly modernRequestStorage = new AsyncLocalStorage<ModernRequestData>();
 	private modernHandler?: McpHttpHandler;
 	private modernNodeHandler?: ReturnType<typeof toNodeHandler>;
+
+	private trackSubscriptionAttempt(
+		method: SubscriptionMethod,
+		protocolEra: 'legacy' | 'modern',
+		protocolVersion: string,
+		params: unknown,
+		clientInfo?: { name: string; version: string }
+	): void {
+		this.metrics.trackSubscriptionAttempt({
+			method,
+			protocolEra,
+			protocolVersion,
+			clientName: clientInfo?.name,
+			clientVersion: clientInfo?.version,
+			requestShape: summarizeSubscriptionRequest(method, params),
+		});
+	}
 
 	constructor(serverFactory: ServerFactory, app: Express) {
 		super(serverFactory, app);
@@ -476,6 +549,9 @@ export class StatelessHttpTransport extends BaseTransport {
 
 		this.trackIpAddress(ipAddress);
 		this.trackProtocolRequest('modern', protocolVersion);
+		if (requestBody?.method === 'subscriptions/listen') {
+			this.trackSubscriptionAttempt('subscriptions/listen', 'modern', protocolVersion, requestBody.params, clientInfo);
+		}
 
 		const authResult = await this.validateAuthAndTrackMetrics(headers);
 		if (!authResult.shouldContinue) {
@@ -629,6 +705,13 @@ export class StatelessHttpTransport extends BaseTransport {
 				this.extractClientInfoFromRequest(requestBody) ??
 				(typeof earlySessionId === 'string' ? this.analyticsSessions.get(earlySessionId)?.clientInfo : undefined);
 
+			this.trackSubscriptionAttempt(
+				rpcMethod as 'resources/subscribe' | 'resources/unsubscribe',
+				'legacy',
+				protocolVersion,
+				requestBody?.params,
+				earlyClientInfo
+			);
 			this.trackMethodCall(trackingName, startTime, true, earlyClientInfo);
 			res.status(200).json(JsonRpcErrors.methodNotFound(extractJsonRpcId(req.body), `${rpcMethod} is not supported`));
 			return;

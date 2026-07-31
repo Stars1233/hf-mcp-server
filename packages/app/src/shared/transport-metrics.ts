@@ -2,6 +2,22 @@ import { createHash } from 'node:crypto';
 import type { TransportType } from './constants.js';
 
 export type ProtocolEra = 'legacy' | 'modern';
+export type SubscriptionMethod = 'resources/subscribe' | 'resources/unsubscribe' | 'subscriptions/listen';
+
+export interface SubscriptionAttempt {
+	method: SubscriptionMethod;
+	protocolEra: ProtocolEra;
+	protocolVersion: string;
+	clientName?: string;
+	clientVersion?: string;
+	requestShape: string;
+}
+
+interface SubscriptionAttemptMetrics extends SubscriptionAttempt {
+	count: number;
+	firstSeen: Date;
+	lastSeen: Date;
+}
 
 interface ProtocolUsageMetrics {
 	era: ProtocolEra;
@@ -76,6 +92,10 @@ export interface TransportMetrics {
 
 	// Method metrics
 	methods: Map<string, MethodMetrics>;
+
+	// Legacy resource-subscription and modern subscription-stream attempts.
+	// Request shapes are sanitized before reaching this metrics layer.
+	subscriptionAttempts: Map<string, SubscriptionAttemptMetrics>;
 
 	// Static page hits (for stateless transport)
 	staticPageHits200?: number;
@@ -168,6 +188,13 @@ const MAX_DISTINCT_METHOD_DETAILS = 500;
 const UNEXPECTED_METHOD_DETAIL = '__unexpected__';
 const MAX_DISTINCT_PROTOCOL_VERSIONS = 32;
 const UNEXPECTED_PROTOCOL_VERSION = '__other__';
+const MAX_DISTINCT_SUBSCRIPTION_ATTEMPTS = 500;
+const UNEXPECTED_SUBSCRIPTION_DIMENSION = '__other__';
+const MAX_SUBSCRIPTION_DIMENSION_LENGTH = 120;
+
+function boundSubscriptionDimension(value: unknown): string | undefined {
+	return typeof value === 'string' ? value.slice(0, MAX_SUBSCRIPTION_DIMENSION_LENGTH) : undefined;
+}
 
 /**
  * API response format for transport metrics
@@ -290,6 +317,18 @@ export interface TransportMetricsResponse {
 		}>;
 	}>;
 
+	subscriptionAttempts: Array<{
+		method: SubscriptionMethod;
+		protocolEra: ProtocolEra;
+		protocolVersion: string;
+		clientName?: string;
+		clientVersion?: string;
+		requestShape: string;
+		count: number;
+		firstSeen: string;
+		lastSeen: string;
+	}>;
+
 	// API call metrics (only shown in external API mode)
 	apiMetrics?: ApiCallMetrics;
 
@@ -363,6 +402,13 @@ export function formatMetricsForAPI(
 				count: client.count,
 			})),
 		})),
+		subscriptionAttempts: Array.from(metrics.subscriptionAttempts.values())
+			.map((attempt) => ({
+				...attempt,
+				firstSeen: attempt.firstSeen.toISOString(),
+				lastSeen: attempt.lastSeen.toISOString(),
+			}))
+			.sort((a, b) => b.count - a.count),
 	};
 }
 
@@ -409,6 +455,7 @@ function createEmptyMetrics(): TransportMetrics {
 		},
 		clients: new Map(),
 		methods: new Map(),
+		subscriptionAttempts: new Map(),
 		staticPageHits200: 0,
 		staticPageHits405: 0,
 	};
@@ -616,11 +663,7 @@ export class MetricsCounter {
 	/**
 	 * Attribute a tool call to the exact protocol revision used for the request.
 	 */
-	trackProtocolToolCall(
-		era: ProtocolEra,
-		version: string,
-		clientInfo?: { name: string; version: string }
-	): void {
+	trackProtocolToolCall(era: ProtocolEra, version: string, clientInfo?: { name: string; version: string }): void {
 		const normalizedVersion = this.normalizeProtocolVersion(era, version);
 		const protocolKey = getProtocolKey(era, normalizedVersion);
 		const aggregate = this.metrics.protocolVersions.get(protocolKey);
@@ -929,6 +972,69 @@ export class MetricsCounter {
 				methodMetrics.averageResponseTime = totalTime / successfulCalls;
 			}
 		}
+	}
+
+	/**
+	 * Track subscription intent without retaining resource URIs or other
+	 * caller-controlled filter values.
+	 */
+	trackSubscriptionAttempt(attempt: SubscriptionAttempt): void {
+		const boundedProtocolVersion =
+			boundSubscriptionDimension(attempt.protocolVersion) ?? UNEXPECTED_SUBSCRIPTION_DIMENSION;
+		const normalizedAttempt = {
+			...attempt,
+			protocolVersion: this.normalizeProtocolVersion(attempt.protocolEra, boundedProtocolVersion),
+			clientName: boundSubscriptionDimension(attempt.clientName),
+			clientVersion: boundSubscriptionDimension(attempt.clientVersion),
+			requestShape: boundSubscriptionDimension(attempt.requestShape) ?? UNEXPECTED_SUBSCRIPTION_DIMENSION,
+		};
+		let key = JSON.stringify([
+			normalizedAttempt.method,
+			normalizedAttempt.protocolEra,
+			normalizedAttempt.protocolVersion,
+			normalizedAttempt.clientName,
+			normalizedAttempt.clientVersion,
+			normalizedAttempt.requestShape,
+		]);
+		let existing = this.metrics.subscriptionAttempts.get(key);
+
+		if (!existing && this.metrics.subscriptionAttempts.size >= MAX_DISTINCT_SUBSCRIPTION_ATTEMPTS) {
+			const overflowAttempt: SubscriptionAttempt = {
+				method: normalizedAttempt.method,
+				protocolEra: normalizedAttempt.protocolEra,
+				protocolVersion: UNEXPECTED_SUBSCRIPTION_DIMENSION,
+				requestShape: UNEXPECTED_SUBSCRIPTION_DIMENSION,
+			};
+			key = JSON.stringify([
+				overflowAttempt.method,
+				overflowAttempt.protocolEra,
+				overflowAttempt.protocolVersion,
+				overflowAttempt.requestShape,
+			]);
+			existing = this.metrics.subscriptionAttempts.get(key);
+			if (!existing) {
+				this.metrics.subscriptionAttempts.set(key, {
+					...overflowAttempt,
+					count: 1,
+					firstSeen: new Date(),
+					lastSeen: new Date(),
+				});
+				return;
+			}
+		}
+
+		if (existing) {
+			existing.count++;
+			existing.lastSeen = new Date();
+			return;
+		}
+
+		this.metrics.subscriptionAttempts.set(key, {
+			...normalizedAttempt,
+			count: 1,
+			firstSeen: new Date(),
+			lastSeen: new Date(),
+		});
 	}
 
 	private normalizeMethodName(method: string): string {
