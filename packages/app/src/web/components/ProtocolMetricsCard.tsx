@@ -1,4 +1,5 @@
 import useSWR from 'swr';
+import type { ColumnDef } from '@tanstack/react-table';
 import { Badge } from './ui/badge';
 import { Card, CardContent } from './ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
@@ -6,6 +7,8 @@ import type { TransportMetricsResponse } from '../../shared/transport-metrics.js
 import { ArrowRight, Network, Radio, Users, Waypoints } from 'lucide-react';
 import { MetricTile, SectionHeader } from './DashboardPrimitives';
 import { formatCompactNumber } from '../lib/dashboard-utils';
+import { DataTable } from './data-table';
+import { createSortableHeader } from './data-table-utils';
 
 const fetcher = (url: string) =>
 	fetch(url).then((response) => {
@@ -41,6 +44,69 @@ function formatProtocolShare(requestCount: number, totalRequests: number): strin
 	return `${Math.round(share).toString()}%`;
 }
 
+type SubscriptionAttempt = TransportMetricsResponse['subscriptionAttempts'][number];
+type SubscriptionAttemptRow = SubscriptionAttempt & {
+	client: string;
+	protocol: string;
+};
+
+const subscriptionAttemptColumns: ColumnDef<SubscriptionAttemptRow>[] = [
+	{
+		accessorKey: 'method',
+		header: createSortableHeader('Method'),
+		cell: ({ row }) => <span className="font-mono text-xs">{row.original.method}</span>,
+	},
+	{
+		accessorKey: 'client',
+		header: createSortableHeader('Client'),
+		cell: ({ row }) =>
+			row.original.clientName ? (
+				<span className="font-mono text-xs">{row.original.client}</span>
+			) : (
+				<span className="text-sm text-muted-foreground">Unattributed</span>
+			),
+	},
+	{
+		accessorKey: 'protocol',
+		header: createSortableHeader('Protocol'),
+		cell: ({ row }) => (
+			<div className="flex items-center gap-2">
+				<Badge variant={row.original.protocolEra === 'modern' ? 'success' : 'secondary'}>
+					{row.original.protocolEra}
+				</Badge>
+				<span className="font-mono text-xs">{row.original.protocolVersion}</span>
+			</div>
+		),
+	},
+	{
+		accessorKey: 'requestShape',
+		header: createSortableHeader('Requested behavior'),
+		cell: ({ row }) => (
+			<span
+				className="block w-72 whitespace-normal break-words font-mono text-xs lg:w-96"
+				title={row.original.requestShape}
+			>
+				{row.original.requestShape}
+			</span>
+		),
+	},
+	{
+		accessorKey: 'count',
+		header: createSortableHeader('Attempts', 'right'),
+		cell: ({ row }) => <div className="text-right font-mono">{row.original.count.toLocaleString()}</div>,
+	},
+	{
+		accessorKey: 'firstSeen',
+		header: createSortableHeader('First seen'),
+		cell: ({ row }) => <span className="text-xs">{new Date(row.original.firstSeen).toLocaleString()}</span>,
+	},
+	{
+		accessorKey: 'lastSeen',
+		header: createSortableHeader('Last seen'),
+		cell: ({ row }) => <span className="text-xs">{new Date(row.original.lastSeen).toLocaleString()}</span>,
+	},
+];
+
 export function ProtocolMetricsCard() {
 	const { data: metrics, error } = useSWR<TransportMetricsResponse>('/api/transport-metrics', fetcher, {
 		refreshInterval: 3000,
@@ -66,6 +132,25 @@ export function ProtocolMetricsCard() {
 			client.protocols.some((protocol) => protocol.era === 'modern') &&
 			client.protocols.some((protocol) => protocol.era === 'legacy')
 	).length;
+	const subscriptionAttempts = metrics.subscriptionAttempts ?? [];
+	const subscriptionAttemptRows: SubscriptionAttemptRow[] = subscriptionAttempts.map((attempt) => ({
+		...attempt,
+		client: attempt.clientName ? `${attempt.clientName}@${attempt.clientVersion ?? 'unknown'}` : 'Unattributed',
+		protocol: `${attempt.protocolEra}:${attempt.protocolVersion}`,
+	}));
+	const subscriptionAttemptTotal = subscriptionAttempts.reduce((sum, attempt) => sum + attempt.count, 0);
+	const modernSubscriptionAttemptTotal = subscriptionAttempts
+		.filter((attempt) => attempt.method === 'subscriptions/listen')
+		.reduce((sum, attempt) => sum + attempt.count, 0);
+	const legacySubscriptionAttemptTotal = subscriptionAttemptTotal - modernSubscriptionAttemptTotal;
+	const subscriptionClientCount = new Set(
+		subscriptionAttempts
+			.filter((attempt) => attempt.clientName)
+			.map((attempt) => `${attempt.clientName}:${attempt.clientVersion ?? 'unknown'}`)
+	).size;
+	const subscriptionBehaviorCount = new Set(
+		subscriptionAttempts.map((attempt) => `${attempt.method}:${attempt.requestShape}`)
+	).size;
 
 	return (
 		<div className="space-y-5">
@@ -201,6 +286,81 @@ export function ProtocolMetricsCard() {
 							</>
 						)}
 					</div>
+				</CardContent>
+			</Card>
+
+			<Card>
+				<CardContent className="space-y-5">
+					<SectionHeader
+						title="Subscription behavior"
+						description="Incoming legacy resource subscriptions and modern listen filters since this process started. This deployment currently rejects every attempt."
+						aside={
+							<Badge
+								variant="outline"
+								className={
+									subscriptionAttemptTotal > 0
+										? 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/35 dark:text-amber-200'
+										: undefined
+								}
+							>
+								{formatCompactNumber(subscriptionAttemptTotal)} attempts
+							</Badge>
+						}
+					/>
+					<div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+						<div className="rounded-xl border bg-muted/25 p-3">
+							<p className="text-xs font-medium text-muted-foreground">Modern listen attempts</p>
+							<p className="mt-1 font-mono text-xl font-semibold">
+								{formatCompactNumber(modernSubscriptionAttemptTotal)}
+							</p>
+						</div>
+						<div className="rounded-xl border bg-muted/25 p-3">
+							<p className="text-xs font-medium text-muted-foreground">Legacy subscription attempts</p>
+							<p className="mt-1 font-mono text-xl font-semibold">
+								{formatCompactNumber(legacySubscriptionAttemptTotal)}
+							</p>
+						</div>
+						<div className="rounded-xl border bg-muted/25 p-3">
+							<p className="text-xs font-medium text-muted-foreground">Attributed clients</p>
+							<p className="mt-1 font-mono text-xl font-semibold">{subscriptionClientCount}</p>
+						</div>
+						<div className="rounded-xl border bg-muted/25 p-3">
+							<p className="text-xs font-medium text-muted-foreground">Observed behaviors</p>
+							<p className="mt-1 font-mono text-xl font-semibold">{subscriptionBehaviorCount}</p>
+						</div>
+					</div>
+					{subscriptionAttemptRows.length === 0 ? (
+						<div className="flex h-24 items-center justify-center rounded-xl border border-dashed text-sm text-muted-foreground">
+							Subscription behavior will appear after the first subscribe or listen attempt.
+						</div>
+					) : (
+						<DataTable
+							columns={subscriptionAttemptColumns}
+							data={subscriptionAttemptRows}
+							searchColumn="client"
+							searchPlaceholder="Filter subscription clients..."
+							facetFilter={{
+								column: 'method',
+								label: 'All subscription methods',
+								options: [
+									{ label: 'Modern listen attempts', value: 'subscriptions/listen' },
+									{ label: 'Legacy subscribe', value: 'resources/subscribe' },
+									{ label: 'Legacy unsubscribe', value: 'resources/unsubscribe' },
+								],
+							}}
+							pageSize={25}
+							defaultColumnVisibility={{
+								method: true,
+								client: true,
+								protocol: true,
+								requestShape: true,
+								count: true,
+								firstSeen: false,
+								lastSeen: true,
+							}}
+							defaultSorting={[{ id: 'count', desc: true }]}
+						/>
+					)}
 				</CardContent>
 			</Card>
 

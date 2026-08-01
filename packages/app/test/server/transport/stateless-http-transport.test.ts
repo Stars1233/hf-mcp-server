@@ -4,6 +4,7 @@ import {
 	MAX_METRICS_RESPONSE_CAPTURE_BYTES,
 	MetricsResponseCapture,
 	StatelessHttpTransport,
+	summarizeSubscriptionRequest,
 } from '../../../src/server/transport/stateless-http-transport.js';
 import type { ServerFactory } from '../../../src/server/transport/base-transport.js';
 import { McpServer } from '@modelcontextprotocol/server';
@@ -234,6 +235,27 @@ describe('StatelessHttpTransport', () => {
 	});
 
 	describe('unsupported resource subscriptions', () => {
+		it('summarizes subscription request shapes without retaining resource URIs', () => {
+			expect(summarizeSubscriptionRequest('resources/subscribe', { uri: 'skill://private/SKILL.md' })).toBe(
+				'uri:present'
+			);
+			expect(summarizeSubscriptionRequest('resources/subscribe', {})).toBe('uri:missing');
+			expect(
+				summarizeSubscriptionRequest('subscriptions/listen', {
+					notifications: {
+						toolsListChanged: true,
+						resourcesListChanged: false,
+						resourceSubscriptions: ['skill://private/SKILL.md', 'skill://private/OTHER.md'],
+						experimentalNotification: true,
+					},
+				})
+			).toBe(
+				'notifications:toolsListChanged:true,resourcesListChanged:false,resourceSubscriptions:2-10,unknownFields:present'
+			);
+			expect(summarizeSubscriptionRequest('subscriptions/listen', { notifications: {} })).toBe('notifications:empty');
+			expect(summarizeSubscriptionRequest('subscriptions/listen', {})).toBe('notifications:missing');
+		});
+
 		it('includes resource URIs in tracked method names', () => {
 			expect(
 				(transport as any).extractMethodForTracking({
@@ -288,6 +310,16 @@ describe('StatelessHttpTransport', () => {
 			const methodMetrics = transport.getMetrics().methods.get('resources/subscribe:skill://example/SKILL.md');
 			expect(methodMetrics).toMatchObject({ count: 1, errors: 1 });
 			expect(methodMetrics?.byClient.get(clientInfo.name)?.count).toBe(1);
+			expect(Array.from(transport.getMetrics().subscriptionAttempts.values())).toContainEqual(
+				expect.objectContaining({
+					method: 'resources/subscribe',
+					protocolEra: 'legacy',
+					clientName: clientInfo.name,
+					clientVersion: clientInfo.version,
+					requestShape: 'uri:present',
+					count: 1,
+				})
+			);
 			expect(mockServerFactory).not.toHaveBeenCalled();
 			expect(res.status).toHaveBeenCalledWith(200);
 		});
@@ -327,6 +359,17 @@ describe('StatelessHttpTransport', () => {
 
 				expect(vi.mocked(serverFactory).mock.calls).toHaveLength(factoryCallsBeforeListen);
 				expect(transport.getMetrics().methods.get('subscriptions/listen')).toMatchObject({ count: 1, errors: 1 });
+				expect(Array.from(transport.getMetrics().subscriptionAttempts.values())).toContainEqual(
+					expect.objectContaining({
+						method: 'subscriptions/listen',
+						protocolEra: 'modern',
+						protocolVersion: '2026-07-28',
+						clientName: 'modern-subscription-test',
+						clientVersion: '1.0.0',
+						requestShape: 'notifications:empty',
+						count: 1,
+					})
+				);
 				expect(
 					Array.from(transport.getMetrics().clients.values()).find(
 						(candidate) => candidate.name === 'modern-subscription-test'

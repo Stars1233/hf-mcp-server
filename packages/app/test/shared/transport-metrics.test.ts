@@ -153,4 +153,76 @@ describe('MetricsCounter', () => {
 		expect(methodMetrics.get('tools/call:tool_42')?.count).toBe(2);
 		expect(methodMetrics.get('tools/call:__unexpected__')?.count).toBe(1);
 	});
+
+	it('aggregates sanitized subscription attempt behavior by client and protocol', () => {
+		const metrics = new MetricsCounter();
+		const attempt = {
+			method: 'subscriptions/listen' as const,
+			protocolEra: 'modern' as const,
+			protocolVersion: '2026-07-28',
+			clientName: 'go-sdk',
+			clientVersion: '1.2.3',
+			requestShape: 'notifications:resourceSubscriptions:1',
+		};
+
+		metrics.trackSubscriptionAttempt(attempt);
+		metrics.trackSubscriptionAttempt(attempt);
+
+		expect(formatMetricsForAPI(metrics.getMetrics(), 'streamableHttpJson', true).subscriptionAttempts).toEqual([
+			expect.objectContaining({
+				...attempt,
+				count: 2,
+				firstSeen: expect.any(String),
+				lastSeen: expect.any(String),
+			}),
+		]);
+	});
+
+	it('bounds subscription attempt dimensions and client identity lengths', () => {
+		const metrics = new MetricsCounter();
+
+		for (let index = 0; index < 502; index++) {
+			metrics.trackSubscriptionAttempt({
+				method: 'resources/subscribe',
+				protocolEra: 'legacy',
+				protocolVersion: '2025-11-25',
+				clientName: `client-${index}-${'x'.repeat(200)}`,
+				clientVersion: '1.0.0',
+				requestShape: 'uri:present',
+			});
+		}
+
+		const attempts = Array.from(metrics.getMetrics().subscriptionAttempts.values());
+		expect(attempts).toHaveLength(501);
+		expect(attempts[0]?.clientName).toHaveLength(120);
+		expect(attempts).toContainEqual(
+			expect.objectContaining({
+				method: 'resources/subscribe',
+				protocolVersion: '__other__',
+				requestShape: '__other__',
+				count: 2,
+			})
+		);
+	});
+
+	it('handles malformed and oversized subscription dimensions defensively', () => {
+		const metrics = new MetricsCounter();
+
+		expect(() =>
+			metrics.trackSubscriptionAttempt({
+				method: 'subscriptions/listen',
+				protocolEra: 'modern',
+				protocolVersion: `version-${'x'.repeat(200)}`,
+				clientName: 42 as unknown as string,
+				clientVersion: `version-${'x'.repeat(200)}`,
+				requestShape: `shape-${'x'.repeat(200)}`,
+			})
+		).not.toThrow();
+
+		const attempt = Array.from(metrics.getMetrics().subscriptionAttempts.values())[0];
+		expect(attempt?.protocolVersion).toHaveLength(120);
+		expect(attempt?.clientName).toBeUndefined();
+		expect(attempt?.clientVersion).toHaveLength(120);
+		expect(attempt?.requestShape).toHaveLength(120);
+	});
 });
