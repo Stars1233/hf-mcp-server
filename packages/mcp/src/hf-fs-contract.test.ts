@@ -234,9 +234,70 @@ describe('parseHfFsRequest', () => {
 		});
 	});
 
+	it('normalizes typed shorthand and Hugging Face web URLs', () => {
+		for (const [input, uri] of [
+			['models/openai/gpt2', 'hf://models/openai/gpt2'],
+			['datasets/openai/example/README.md', 'hf://datasets/openai/example/README.md'],
+			['https://huggingface.co/openai/gpt2', 'hf://models/openai/gpt2'],
+			['https://huggingface.co/openai/gpt2/blob/main/README.md', 'hf://models/openai/gpt2/README.md'],
+			['https://huggingface.co/openai/gpt2/blob/dev/README.md', 'hf://models/openai/gpt2@dev/README.md'],
+			[
+				'https://huggingface.co/openai/gpt2/resolve/refs%2Fpr%2F3/README.md',
+				'hf://models/openai/gpt2@refs%2Fpr%2F3/README.md',
+			],
+			['https://huggingface.co/datasets/openai/example/tree/main/data', 'hf://datasets/openai/example/data'],
+			['https://www.huggingface.co/spaces/openai/demo', 'hf://spaces/openai/demo'],
+			[
+				'https://huggingface.co/buckets/openai/assets/resolve/images/logo.png',
+				'hf://buckets/openai/assets/images/logo.png',
+			],
+			['https://huggingface.co/docs/transformers/main/en/index', 'hf://docs/transformers/main/en/index'],
+			['docs/transformers/main/en/index', 'hf://docs/transformers/main/en/index'],
+			['https://huggingface.co/papers/2501.00001', 'hf://papers/2501.00001'],
+		] as const) {
+			expect(parseHfFsRequest({ cmd: 'ls', args: [input] }).params.uri).toBe(uri);
+		}
+	});
+
+	it('keeps non-Hugging Face and insecure web URLs outside the hf:// namespace', () => {
+		for (const uri of [
+			'https://example.com/models/org/repo',
+			'http://huggingface.co/models/org/repo',
+			'https://huggingface.co/settings/tokens',
+			'https://huggingface.co/openai/gpt2/discussions',
+			'https://huggingface.co/openai/gpt2?download=true',
+			'https://user@huggingface.co/openai/gpt2',
+		]) {
+			expect(() => parseHfFsRequest({ cmd: 'ls', args: [uri] })).toThrow('URI must start with hf://');
+		}
+	});
+
+	it('treats --sort trending on listing roots as the trending virtual directory', () => {
+		for (const root of ['models', 'datasets', 'spaces', 'papers']) {
+			expect(
+				parseHfFsRequest({
+					cmd: 'ls',
+					args: [`hf://${root}`, '--sort', 'trending'],
+				})
+			).toEqual({
+				params: {
+					op: 'ls',
+					uri: `hf://${root}/trending`,
+				},
+				warnings: [`Treated --sort trending on hf://${root} as hf://${root}/trending.`],
+			});
+		}
+		expect(parseHfFsRequest({ cmd: 'ls', args: ['models/', '--sort', 'trending'] }).params.uri).toBe(
+			'hf://models/trending'
+		);
+		expect(() => parseHfFsRequest({ cmd: 'ls', args: ['hf://models', '--sort', 'trending', '--recursive'] })).toThrow(
+			'--sort trending does not support recursive or glob'
+		);
+	});
+
 	it.each([
 		[{ cmd: 'ls', args: [] }, 'ls requires an hf:// URI'],
-		[{ cmd: 'stat', args: ['models/org/repo'] }, 'URI must start with hf://'],
+		[{ cmd: 'stat', args: ['owner/repo'] }, 'URI must start with hf://'],
 		[{ cmd: 'stat', args: ['hf://models/org/repo', '--limit', '1'] }, 'unexpected argument for stat'],
 		[{ cmd: 'ls', args: ['hf://models/org', '--limit'] }, '--limit requires a value'],
 		[{ cmd: 'ls', args: ['hf://models/org', '--limit', 'many'] }, '--limit requires an integer'],

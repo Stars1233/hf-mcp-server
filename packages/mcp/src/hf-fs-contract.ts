@@ -52,7 +52,7 @@ Grammar; each token below is one args array element:
 TYPE = file|dir|repo|bucket|collection|paper|link.
 Type aliases: f=file, d=dir, l=link, model|dataset|space=repo.
 SORT = createdAt|downloads|likes|lastModified|likes30d|trendingScore|mainSize|id|trending|upvotes.
-URI starts with hf://. QUERY and GLOB are each one string token.
+URI uses hf://, a typed shorthand such as models/OWNER/REPO, or a canonical https://huggingface.co URL. QUERY and GLOB are each one string token.
 Search URI: hf://models|datasets|spaces[/OWNER], hf://collections[/OWNER], any hf://docs scope, or exactly hf://papers; not hf://.
 Repository and collection searches may omit QUERY to browse or filter; documentation and paper searches require it.
 Search joins multiple positional QUERY tokens with spaces. Cat and stat join one RELATIVE_PATH token to URI.
@@ -158,7 +158,7 @@ export function parseHfFsRequest(request: HfFsRequest): ParsedHfFsRequest {
 		throw new Error(`EINVAL: ${request.cmd} requires an hf:// URI`);
 	}
 
-	let uri = positionals[0];
+	let uri = normalizeHfFsUri(positionals[0] ?? '');
 	if (!uri?.startsWith('hf://')) {
 		throw new Error('EINVAL: URI must start with hf://');
 	}
@@ -196,8 +196,120 @@ export function parseHfFsRequest(request: HfFsRequest): ParsedHfFsRequest {
 		...(typeof options.offset === 'number' ? { offset: options.offset } : {}),
 		...(typeof options.limit === 'number' ? { limit: options.limit } : {}),
 	};
+	const normalizationWarnings = normalizeParsedParams(params);
 	validateParsedParams(params);
-	return softenParsedParams(params);
+	const softened = softenParsedParams(params);
+	return { params: softened.params, warnings: [...normalizationWarnings, ...softened.warnings] };
+}
+
+function normalizeHfFsUri(value: string): string {
+	if (/^(?:models|datasets|spaces|buckets|collections|papers|docs)(?:\/|$)/.test(value)) {
+		return `hf://${value.replace(/\/+$/, '')}`;
+	}
+	if (!/^https?:\/\//i.test(value)) {
+		return value;
+	}
+
+	let url: URL;
+	try {
+		url = new URL(value);
+	} catch {
+		return value;
+	}
+	if (
+		url.protocol !== 'https:' ||
+		!['huggingface.co', 'www.huggingface.co'].includes(url.hostname) ||
+		url.port ||
+		url.username ||
+		url.password ||
+		url.search ||
+		url.hash
+	) {
+		return value;
+	}
+
+	const segments = url.pathname.split('/').filter(Boolean);
+	if (segments.length === 0) {
+		return 'hf://';
+	}
+	const first = segments[0] ?? '';
+	if (['models', 'datasets', 'spaces', 'buckets', 'collections', 'papers', 'docs'].includes(first)) {
+		return normalizeTypedHfWebPath(segments);
+	}
+	const isRepoFileUrl = segments.length >= 4 && ['blob', 'resolve', 'tree'].includes(segments[2] ?? '');
+	if (segments.length !== 2 && !isRepoFileUrl) {
+		return value;
+	}
+	if (
+		[
+			'api',
+			'collections',
+			'datasets',
+			'docs',
+			'join',
+			'login',
+			'models',
+			'new',
+			'organizations',
+			'papers',
+			'pricing',
+			'search',
+			'settings',
+			'spaces',
+		].includes(first)
+	) {
+		return value;
+	}
+	return normalizeRepoWebPath('models', segments);
+}
+
+function normalizeTypedHfWebPath(segments: string[]): string {
+	const type = segments[0] ?? '';
+	if (type === 'models' && segments.length >= 3) {
+		return normalizeRepoWebPath(type, segments.slice(1));
+	}
+	if (['datasets', 'spaces'].includes(type) && segments.length >= 3) {
+		return normalizeRepoWebPath(type, segments.slice(1));
+	}
+	if (type === 'buckets' && segments.length >= 4 && segments[3] === 'resolve') {
+		return `hf://buckets/${[segments[1], segments[2], ...segments.slice(4)].join('/')}`;
+	}
+	return `hf://${segments.join('/')}`;
+}
+
+function normalizeRepoWebPath(type: string, segments: string[]): string {
+	if (segments.length < 2) {
+		return `hf://${type}/${segments.join('/')}`;
+	}
+	const [owner, repo, route, revision, ...path] = segments;
+	if (route === 'blob' || route === 'resolve' || route === 'tree') {
+		if (!revision) {
+			return `hf://${type}/${owner}/${repo}`;
+		}
+		const repoWithRevision = revision === 'main' ? repo : `${repo}@${revision}`;
+		return `hf://${type}/${[owner, repoWithRevision, ...path].join('/')}`;
+	}
+	if (segments.length > 2) {
+		return `https://huggingface.co/${type === 'models' ? '' : `${type}/`}${segments.join('/')}`;
+	}
+	return `hf://${type}/${segments.join('/')}`;
+}
+
+function normalizeParsedParams(params: HfFsParams): string[] {
+	if (
+		params.op === 'ls' &&
+		params.sort === 'trending' &&
+		/^hf:\/\/(?:models|datasets|spaces|papers)$/.test(params.uri)
+	) {
+		if (params.recursive || params.glob) {
+			throw new Error('EINVAL: --sort trending does not support recursive or glob listing options');
+		}
+		const source = params.uri;
+		params.uri = `${source}/trending`;
+		delete params.sort;
+		return [`Treated --sort trending on ${source} as ${params.uri}.`];
+	}
+	return [];
 }
 
 function validateParsedParams(params: HfFsParams): void {
