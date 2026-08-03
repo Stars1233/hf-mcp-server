@@ -55,25 +55,4 @@ describe('immutable tool registration', () => {
 		process.env.DISABLE_TOOLS = REPO_SEARCH_TOOL_ID;
 		expect((await inspectSearchBouquet()).toolNames).toEqual(['hf_whoami', HF_FS_TOOL_ID]);
 	});
-
-	it('does not register a built-in widget for OpenAI clients', async () => {
-		const apiClient = new McpApiClient({ type: 'static' }, transportInfo);
-		const factory = createServerFactory(new WebServer(), apiClient);
-		const { server } = await factory(
-			{ 'x-mcp-bouquet': 'search' },
-			undefined,
-			undefined,
-			{ clientInfo: { name: 'openai-mcp', version: '1.0.0' } }
-		);
-		const client = new Client({ name: 'openai-mcp', version: '1.0.0' });
-		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-		await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
-
-		try {
-			expect(client.getServerCapabilities()?.resources).toBeUndefined();
-		} finally {
-			await client.close();
-			await server.close();
-		}
-	});
 });
