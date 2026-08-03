@@ -1,7 +1,7 @@
 import type { CallToolResult, Progress } from '@modelcontextprotocol/server';
 import { callGradioToolWithHeaders } from '@llmindset/hf-mcp';
 import { logger } from './logger.js';
-import { stripImageContentFromResult, extractUrlFromContent } from './gradio-result-processor.js';
+import { stripImageContentFromResult } from './gradio-result-processor.js';
 
 /**
  * Options for calling a Gradio tool
@@ -13,16 +13,6 @@ export interface GradioToolCallOptions {
 	toolName: string;
 	/** Outward-facing tool name (for logging) */
 	outwardFacingName: string;
-	/** Session information for client-specific handling */
-	sessionInfo?: {
-		clientSessionId?: string;
-		isAuthenticated?: boolean;
-		clientInfo?: { name: string; version: string };
-	};
-	/** Gradio widget URI for OpenAI client */
-	gradioWidgetUri?: string;
-	/** Space name for structured content */
-	spaceName?: string;
 }
 
 /**
@@ -31,7 +21,7 @@ export interface GradioToolCallOptions {
  * - MCP tool invocation
  *
  * Returns the raw MCP result without post-processing. Callers should apply
- * image filtering and OpenAI-specific transforms as needed using applyResultPostProcessing.
+ * image filtering as needed using applyResultPostProcessing.
  *
  * This ensures both proxied gr_* tools and the space tool's invoke operation
  * behave identically.
@@ -72,7 +62,6 @@ export async function callGradioTool(
 /**
  * Applies post-processing to a Gradio tool result:
  * - Image content filtering (conditionally)
- * - OpenAI-specific structured content
  *
  * This ensures consistent behavior across all Gradio tools.
  */
@@ -83,22 +72,6 @@ export function applyResultPostProcessing(result: CallToolResult, options: Gradi
 		toolName: options.toolName,
 		outwardFacingName: options.outwardFacingName,
 	});
-
-	// For OpenAI MCP client, check if result contains a URL and set structuredContent
-	if (options.sessionInfo?.clientInfo?.name === 'openai-mcp') {
-		const extractedUrl = extractUrlFromContent(filteredResult.content);
-		if (extractedUrl) {
-			logger.debug({ tool: options.toolName, url: extractedUrl }, 'Setting structuredContent with extracted URL');
-			(
-				filteredResult as CallToolResult & {
-					structuredContent?: { url: string; spaceName?: string };
-				}
-			).structuredContent = {
-				url: extractedUrl,
-				spaceName: options.spaceName,
-			};
-		}
-	}
 
 	return filteredResult;
 }

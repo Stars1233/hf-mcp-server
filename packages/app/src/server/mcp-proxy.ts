@@ -10,16 +10,12 @@ import { getGradioSpaces } from './utils/gradio-discovery.js';
 import { logToolQuery, type QueryLoggerOptions } from './utils/query-logger.js';
 import { z } from 'zod';
 import type { McpServer, ServerContext } from '@modelcontextprotocol/server';
-import { createRequire } from 'module';
-import { createGradioWidgetResourceConfig } from './resources/gradio-widget-resource.js';
-import { callStreamableHttpTool, readStreamableHttpResource } from './utils/streamable-http-tool-caller.js';
+import { callStreamableHttpTool } from './utils/streamable-http-tool-caller.js';
 import type { ProxyToolDefinition, ProxyToolInputSchema } from './utils/proxy-tools-config.js';
 import { getProxyToolsConfig } from './utils/proxy-tools-config.js';
-import { rewriteProxyAppToolMeta } from './utils/proxy-apps.js';
+import { registerProxyAppResource, rewriteProxyAppToolMeta } from './utils/proxy-apps.js';
 import { parseDisabledTools } from './utils/disabled-tools.js';
 import { createProgressRelay } from './utils/progress-relay.js';
-
-const MCP_APP_RESOURCE_MIME_TYPE = 'text/html;profile=mcp-app';
 
 function isDuplicateRegistrationError(error: unknown): boolean {
 	return error instanceof Error && /already registered/i.test(error.message);
@@ -126,35 +122,17 @@ function registerProxyToolsFromConfig(
 		}
 
 		if (resourceMapping && !registeredResources.has(resourceMapping.localUri)) {
-			registeredResources.add(resourceMapping.localUri);
-			server.registerResource(
-				`proxy-app:${config.toolName}`,
-				resourceMapping.localUri,
+			registerProxyAppResource(
+				server,
+				resourceMapping,
 				{
+					name: `proxy-app:${config.toolName}`,
 					title,
 					description: `MCP App resource proxied from ${config.proxyId}.`,
-					mimeType: MCP_APP_RESOURCE_MIME_TYPE,
+					serverUrl: config.url,
+					hfToken,
 				},
-				async () => {
-					logger.trace(
-						{
-							toolName: config.toolName,
-							serverUrl: config.url,
-							localUri: resourceMapping.localUri,
-							upstreamUri: resourceMapping.upstreamUri,
-						},
-						'Streamable proxy resource read received'
-					);
-
-					const result = await readStreamableHttpResource(config.url, resourceMapping.upstreamUri, hfToken);
-					return {
-						...result,
-						contents: result.contents.map((content) => ({
-							...content,
-							uri: resourceMapping.localUri,
-						})),
-					};
-				}
+				registeredResources
 			);
 		}
 	};
@@ -225,12 +203,6 @@ export const createProxyServerFactory = (
 		sessionInfo?: ServerRequestContext
 	): Promise<ServerFactoryResult> => {
 		logger.debug({ skipGradio }, '=== PROXY FACTORY CALLED ===');
-
-		// Get version for widget URI (needed for OpenAI MCP client)
-		const require = createRequire(import.meta.url);
-		const { version } = require('../../package.json') as { version: string };
-		const gradioWidgetUri =
-			sessionInfo?.clientInfo?.name === 'openai-mcp' ? createGradioWidgetResourceConfig(version).uri : undefined;
 
 		// Extract auth, bouquet, and gradio using shared utility
 		const { hfToken, bouquet, gradio } = extractAuthBouquetAndMix(headers, { allowDefaultHfToken: headers === null });
@@ -348,7 +320,6 @@ export const createProxyServerFactory = (
 
 			registerRemoteTools(server, connection, hfToken, sessionInfo, {
 				stripImageContent,
-				gradioWidgetUri,
 			});
 		}
 

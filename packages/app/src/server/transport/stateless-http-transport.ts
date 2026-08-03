@@ -298,8 +298,11 @@ export class StatelessHttpTransport extends BaseTransport {
 		const method = requestBody?.method;
 		if (!method || !RESOURCE_METHODS.has(method)) return false;
 
+		// Resource discovery must include dynamic Gradio MCP Apps.
+		if (method === 'resources/list' || method === 'resources/templates/list') return false;
+
 		// Preserve the full server path for resource surfaces that are not purely static skills.
-		if (clientInfo?.name === 'openai-mcp' || this.hasProxyAppResources()) return false;
+		if (this.hasProxyAppResources()) return false;
 		if (isClientDenied(clientInfo?.name, req.headers['user-agent'])) return false;
 
 		const catalog = await getSkillCatalog();

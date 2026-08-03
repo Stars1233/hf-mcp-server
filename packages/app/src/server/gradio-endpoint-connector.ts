@@ -10,6 +10,7 @@ import { spaceMetadataCache, CACHE_CONFIG } from './utils/gradio-cache.js';
 import { callGradioTool, applyResultPostProcessing, type GradioToolCallOptions } from './utils/gradio-tool-caller.js';
 import { parseDisabledTools } from './utils/disabled-tools.js';
 import { createProgressRelay } from './utils/progress-relay.js';
+import { registerProxyAppResource, rewriteProxyAppToolMeta } from './utils/proxy-apps.js';
 import * as hfMcp from '@llmindset/hf-mcp';
 import { fetchWithProfile, NETWORK_FETCH_PROFILES } from '@llmindset/hf-mcp/network';
 
@@ -37,7 +38,7 @@ interface GradioEndpoint {
 }
 
 // Define type for array format schema
-interface EndpointConnection {
+export interface EndpointConnection {
 	endpointId: string;
 	originalIndex: number;
 	client: Client | null; // Will be null when using schema-only approach
@@ -50,7 +51,6 @@ interface EndpointConnection {
 
 interface RegisterRemoteToolsOptions {
 	stripImageContent?: boolean;
-	gradioWidgetUri?: string;
 }
 
 type EndpointConnectionResult =
@@ -83,7 +83,7 @@ export function parseSchemaResponse(
 	schemaResponse: unknown,
 	endpointId: string,
 	subdomain: string
-): Array<{ name: string; description?: string; inputSchema: JsonSchema }> {
+): Array<{ name: string; description?: string; inputSchema: JsonSchema; _meta?: Record<string, unknown> }> {
 	try {
 		const parsed = hfMcp.parseGradioSchemaResponse(schemaResponse);
 		gradioMetrics.recordSchemaFormat(parsed.format);
@@ -98,7 +98,12 @@ export function parseSchemaResponse(
 			'Retrieved schema'
 		);
 
-		return parsed.tools as Array<{ name: string; description?: string; inputSchema: JsonSchema }>;
+		return parsed.tools as Array<{
+			name: string;
+			description?: string;
+			inputSchema: JsonSchema;
+			_meta?: Record<string, unknown>;
+		}>;
 	} catch (error) {
 		if (error instanceof Error && error.message.includes('no tools found')) {
 			// Preserve legacy error wording expected by tests/callers
@@ -235,6 +240,7 @@ async function fetchEndpointSchema(
 				required: parsedTool.inputSchema.required || [],
 				description: parsedTool.inputSchema.description,
 			} as Tool['inputSchema'],
+			_meta: parsedTool._meta,
 		}));
 
 	return {
@@ -433,12 +439,9 @@ function createToolHandler(
 				stripImageContent: options.stripImageContent,
 				toolName: tool.name,
 				outwardFacingName,
-				sessionInfo,
-				gradioWidgetUri: options.gradioWidgetUri,
-				spaceName: connection.name,
 			};
 
-			// Apply standard post-processing (image stripping + OpenAI structured content)
+			// Apply standard image filtering.
 			return applyResultPostProcessing(result, postProcessOptions);
 		} catch (err) {
 			// Ensure meaningful error output instead of [object Object]
@@ -507,6 +510,7 @@ export function registerRemoteTools(
 	options: RegisterRemoteToolsOptions = {}
 ): void {
 	const disabledTools = parseDisabledTools();
+	const registeredResources = new Set<string>();
 	connection.tools.forEach((tool, toolIndex) => {
 		// Generate tool name
 		const outwardFacingName = createGradioToolName(
@@ -522,6 +526,9 @@ export function registerRemoteTools(
 
 		// Create display info
 		const { title, description } = createToolDisplayInfo(connection, tool);
+		const { meta, resourceMapping } = connection.mcpUrl
+			? rewriteProxyAppToolMeta(tool._meta, `gradio-${connection.endpointId}`, tool.name)
+			: { meta: tool._meta };
 
 		// Convert schema
 		const schemaShape = convertToolSchemaToZod(tool);
@@ -560,18 +567,25 @@ export function registerRemoteTools(
 					openWorldHint: true,
 					title: title,
 				},
-				...(sessionInfo?.clientInfo?.name === 'openai-mcp'
-					? {
-							_meta: {
-								'openai/outputTemplate': options.gradioWidgetUri || '',
-								'openai/toolInvocation/invoking': `Calling the Hugging Face Space ${connection.name || connection.endpointId}`,
-								'openai/toolInvocation/invoked': 'Your content is being generated',
-							},
-						}
-					: {}),
+				_meta: meta,
 			},
 			handler
 		);
+
+		if (resourceMapping && connection.mcpUrl) {
+			registerProxyAppResource(
+				server,
+				resourceMapping,
+				{
+					name: `gradio-app:${outwardFacingName}`,
+					title,
+					description: `MCP App resource proxied from ${connection.name || connection.endpointId}.`,
+					serverUrl: connection.mcpUrl,
+					hfToken,
+				},
+				registeredResources
+			);
+		}
 	});
 }
 
