@@ -4,6 +4,7 @@ import {
 	type HfDatasetTransportOptions,
 	type LogEntry,
 	redactHfTokens,
+	redactSensitiveLogValues,
 } from '../../../src/server/utils/hf-dataset-transport.js';
 import type { CommitOutput } from '@huggingface/hub';
 import { tmpdir } from 'node:os';
@@ -343,14 +344,55 @@ describe('HfDatasetLogger', () => {
 	});
 
 	describe('Token redaction', () => {
-		it('redacts strings that look like HF tokens', () => {
-			const tokenLikeString = 'hf_xzzzzzz';
-			const withContext = `Bearer ${tokenLikeString} extra`;
-			const notToken = 'hf_short';
+		it('redacts supported Hugging Face credential formats without corrupting identifiers', () => {
+			const credentials = [
+				`hf_${'a'.repeat(34)}`,
+				`hf_app_${'b'.repeat(32)}`,
+				`hf_oauth_${'c'.repeat(32)}.${'d'.repeat(32)}.${'e'.repeat(32)}`,
+				`hf_oauth__refresh_${'f'.repeat(34)}`,
+				`hf_jwt_${'g'.repeat(32)}.${'h'.repeat(32)}.${'i'.repeat(32)}`,
+				`hf_s3_${'j'.repeat(32)}.${'k'.repeat(32)}.${'l'.repeat(32)}`,
+				`oauth_app_secret_${'m'.repeat(34)}`,
+			];
+			for (const credential of credentials) {
+				expect(redactHfTokens(`Bearer ${credential} extra`)).toBe('Bearer REDACTED_TOKEN extra');
+			}
+			for (const identifier of [
+				'hf_sandbox',
+				'hf_sandbox_exec',
+				'hf_sandbox_fs',
+				'hf_semantic_search',
+				'hf_oauth_config',
+				'hf_jwt_debug',
+				'hf_s3_client',
+			]) {
+				expect(redactHfTokens(identifier)).toBe(identifier);
+			}
+			expect(redactHfTokens(`hf_${'a'.repeat(35)}`)).toBe(`hf_${'a'.repeat(35)}`);
+		});
 
-			expect(redactHfTokens(tokenLikeString)).toBe('REDACTED_TOKEN');
-			expect(redactHfTokens(withContext)).toBe('Bearer REDACTED_TOKEN extra');
-			expect(redactHfTokens(notToken)).toBe('hf_short');
+		it('redacts nested sensitive values while preserving their keys', () => {
+			expect(
+				redactSensitiveLogValues({
+					secrets: { HF_TOKEN: `hf_oauth_${'a'.repeat(64)}` },
+					environment: { SAFE: 'value' },
+					nested: {
+						access_token: `hf_${'b'.repeat(34)}`,
+						clientSecret: 'secret',
+						'x-api-key': 'key',
+						label: 'keep',
+					},
+				})
+			).toEqual({
+				secrets: '<redacted>',
+				environment: '<redacted>',
+				nested: {
+					access_token: '<redacted>',
+					clientSecret: '<redacted>',
+					'x-api-key': '<redacted>',
+					label: 'keep',
+				},
+			});
 		});
 
 		it('redacts tokens before upload', async () => {
@@ -374,7 +416,8 @@ describe('HfDatasetLogger', () => {
 			logger.processLog({
 				level: 30,
 				time: Date.now(),
-				msg: 'Contains hf_xzzzzzz in message',
+				msg: `Contains hf_oauth_${'x'.repeat(32)}.${'y'.repeat(32)}.${'z'.repeat(32)} in message`,
+				apiKey: 'non-hf-secret',
 			});
 
 			await (logger as unknown as { flush: () => Promise<void> }).flush();
@@ -385,7 +428,8 @@ describe('HfDatasetLogger', () => {
 			const uploaded = await blobContent.file.content.text();
 
 			expect(uploaded).toContain('REDACTED_TOKEN');
-			expect(uploaded).not.toMatch(/hf_[A-Za-z0-9]{7,}[A-Za-z0-9-]*/);
+			expect(uploaded).not.toContain('hf_oauth_');
+			expect(uploaded).not.toContain('non-hf-secret');
 		});
 	});
 });
