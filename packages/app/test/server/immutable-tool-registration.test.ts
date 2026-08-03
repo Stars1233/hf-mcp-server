@@ -55,4 +55,20 @@ describe('immutable tool registration', () => {
 		process.env.DISABLE_TOOLS = REPO_SEARCH_TOOL_ID;
 		expect((await inspectSearchBouquet()).toolNames).toEqual(['hf_whoami', HF_FS_TOOL_ID]);
 	});
+
+	it('does not advertise Skills resources on the long-lived STDIO server', async () => {
+		const apiClient = new McpApiClient({ type: 'static' }, transportInfo);
+		const factory = createServerFactory(new WebServer(), apiClient);
+		const { server } = await factory(null);
+		const client = new Client({ name: 'stdio-test', version: '1.0.0' });
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+		await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+		try {
+			expect(client.getServerCapabilities()?.resources).toBeUndefined();
+			expect(client.getServerCapabilities()?.extensions).toBeUndefined();
+		} finally {
+			await client.close();
+			await server.close();
+		}
+	});
 });

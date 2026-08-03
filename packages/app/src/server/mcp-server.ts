@@ -51,7 +51,7 @@ import { registerCapabilities } from './utils/capability-utils.js';
 import { applyResultPostProcessing, type GradioToolCallOptions } from './utils/gradio-tool-caller.js';
 import { registerSkillResources } from './skills/skill-resources.js';
 import { isClientDenied } from '../shared/client-denylist.js';
-import { getSkillCatalog } from './skills/skill-catalog-cache.js';
+import { getSkillCatalog, getSkillCatalogRemainingTtlMs } from './skills/skill-catalog-cache.js';
 import { SERVER_VERSION } from './server-build-info.js';
 import { parseDisabledTools } from './utils/disabled-tools.js';
 import { createProgressRelay } from './utils/progress-relay.js';
@@ -179,8 +179,10 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 			}
 		};
 
-		// Load the experimental skills catalog (cached across sessions). Failure leaves it null and disables skills.
-		const skillCatalog = await getSkillCatalog();
+		// Skills-over-MCP is served only on HTTP transports. STDIO creates one
+		// long-lived server and cannot atomically replace its registered resource
+		// namespace when a bucket snapshot refreshes.
+		const skillCatalog = headers === null ? null : await getSkillCatalog();
 		// Some clients (e.g. cursor-vscode) flood the resource surface; deny them the
 		// Skills resources entirely — not registered and not advertised.
 		const clientDenied = isClientDenied(sessionInfo?.clientInfo?.name, headers?.['user-agent']);
@@ -835,9 +837,12 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 			);
 		}
 
-		// Register Skills (SEP-2640) — `skill://` resources + `skill://index.json`.
+		// Register SEP-2640 discovery methods and verified in-memory skill resources.
 		if (skillCatalog && hasSkills) {
-			registerSkillResources(server, skillCatalog);
+			registerSkillResources(server, skillCatalog, {
+				protocolVersion: sessionInfo?.protocolVersion,
+				ttlMs: getSkillCatalogRemainingTtlMs(skillCatalog),
+			});
 		}
 
 		logger.info(
