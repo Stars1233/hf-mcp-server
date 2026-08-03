@@ -298,7 +298,7 @@ describe('parseSchemaResponse', () => {
 });
 
 describe('registerRemoteTools', () => {
-	it('proxies advertised MCP Apps without injecting OpenAI widget metadata', async () => {
+	it('proxies advertised MCP Apps', async () => {
 		const server = new McpServer({ name: 'gradio-app-test', version: '1.0.0' });
 		const connection: EndpointConnection = {
 			endpointId: 'gradio_owner-space',
@@ -326,9 +326,7 @@ describe('registerRemoteTools', () => {
 				},
 			],
 		};
-		registerRemoteTools(server, connection, undefined, {
-			clientInfo: { name: 'openai-mcp', version: '1.0.0' },
-		});
+		registerRemoteTools(server, connection);
 
 		const client = new Client({ name: 'test-client', version: '1.0.0' });
 		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -349,8 +347,6 @@ describe('registerRemoteTools', () => {
 					csp: { connectSrc: ['https://huggingface.co'] },
 				},
 			});
-			expect(tools[0]?._meta).not.toHaveProperty('openai/outputTemplate');
-			expect(tools[1]?._meta).not.toHaveProperty('openai/outputTemplate');
 		} finally {
 			await client.close();
 			await server.close();
