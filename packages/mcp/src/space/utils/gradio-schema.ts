@@ -4,7 +4,7 @@ export type ParsedSchemaFormat = 'array' | 'object';
 
 export interface ParsedGradioSchema {
 	format: ParsedSchemaFormat;
-	tools: Array<{ name: string; description?: string; inputSchema: unknown }>;
+	tools: Array<{ name: string; description?: string; inputSchema: unknown; _meta?: Record<string, unknown> }>;
 }
 
 /**
@@ -75,5 +75,6 @@ export function normalizeParsedTools(parsed: ParsedGradioSchema): Tool[] {
 			name: parsedTool.name,
 			description: parsedTool.description || `${parsedTool.name} tool`,
 			inputSchema: parsedTool.inputSchema as Tool['inputSchema'],
+			_meta: parsedTool._meta,
 		}));
 }

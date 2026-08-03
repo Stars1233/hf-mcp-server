@@ -12,12 +12,8 @@
 				"src/server/streamableHttp.ts",
 				"src/server/utils/hf-dataset-transport.ts",
 				"src/web/mcp-welcome.tsx",
-				"src/web/gradio-widget.tsx",
-				"src/web/gradio-widget-dev.tsx",
 				"src/web/index.html",
-				"src/web/mcp-welcome.html",
-				"src/web/gradio-widget.html",
-				"src/web/gradio-widget-dev.html"
+				"src/web/mcp-welcome.html"
 			],
 			"project": [
 				"src/**/*.{js,mjs,cjs,jsx,ts,tsx,mts,cts}",

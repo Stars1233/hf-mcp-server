@@ -48,7 +48,6 @@ import type { AppSettings } from '../shared/settings.js';
 import { extractAuthBouquetAndMix } from './utils/auth-utils.js';
 import { ToolSelectionStrategy, type ToolSelectionContext } from './utils/tool-selection-strategy.js';
 import { registerCapabilities } from './utils/capability-utils.js';
-import { createGradioWidgetResourceConfig } from './resources/gradio-widget-resource.js';
 import { applyResultPostProcessing, type GradioToolCallOptions } from './utils/gradio-tool-caller.js';
 import { registerSkillResources } from './skills/skill-resources.js';
 import { isClientDenied } from '../shared/client-denylist.js';
@@ -722,8 +721,6 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 									stripImageContent,
 									toolName: dynamicSpaceToolConfig.name,
 									outwardFacingName: dynamicSpaceToolConfig.name,
-									sessionInfo,
-									spaceName: params.space_name,
 								};
 
 								const processedResult = applyResultPostProcessing(
@@ -838,22 +835,6 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 			);
 		}
 
-		// Register Gradio widget resource for OpenAI MCP client (skybridge)
-		if (sessionInfo?.clientInfo?.name === 'openai-mcp') {
-			logger.debug('Registering Gradio widget resource for skybridge client');
-			const widgetConfig = createGradioWidgetResourceConfig(SERVER_VERSION);
-			server.registerResource(widgetConfig.name, widgetConfig.uri, {}, async () => ({
-				contents: [
-					{
-						uri: widgetConfig.uri,
-						mimeType: widgetConfig.mimeType,
-						text: widgetConfig.htmlContent,
-						_meta: widgetConfig.metadata,
-					},
-				],
-			}));
-		}
-
 		// Register Skills (SEP-2640) — `skill://` resources + `skill://index.json`.
 		if (skillCatalog && hasSkills) {
 			registerSkillResources(server, skillCatalog);
@@ -870,7 +851,6 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 		);
 
 		registerCapabilities(server, {
-			hasResources: !clientDenied && sessionInfo?.clientInfo?.name === 'openai-mcp',
 			hasSkills,
 		});
 

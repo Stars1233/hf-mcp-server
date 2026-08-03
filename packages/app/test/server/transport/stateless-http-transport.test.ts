@@ -206,6 +206,20 @@ describe('StatelessHttpTransport', () => {
 	});
 
 	describe('skipGradioSetup', () => {
+		it('should discover Gradio apps for resource requests', () => {
+			expect((transport as any).skipGradioSetup({ method: 'resources/list' })).toBe(false);
+			expect(
+				(transport as any).skipGradioSetup({
+					method: 'resources/read',
+					params: { uri: 'ui://hf-mcp-proxy/gradio-space/app' },
+				})
+			).toBe(false);
+		});
+
+		it('should still skip setup for initialize', () => {
+			expect((transport as any).skipGradioSetup({ method: 'initialize' })).toBe(true);
+		});
+
 		it('should not skip setup for Gradio endpoint tool calls', () => {
 			const result = (transport as any).skipGradioSetup({
 				method: 'tools/call',

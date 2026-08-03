@@ -1,8 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { parseSchemaResponse, convertJsonSchemaToZod } from '../../src/server/gradio-endpoint-connector.js';
+import {
+	parseSchemaResponse,
+	convertJsonSchemaToZod,
+	registerRemoteTools,
+	type EndpointConnection,
+} from '../../src/server/gradio-endpoint-connector.js';
 import { stripImageContentFromResult } from '../../src/server/utils/gradio-result-processor.js';
 import { z } from 'zod';
-import type { CallToolResult } from '@modelcontextprotocol/server';
+import { McpServer, type CallToolResult } from '@modelcontextprotocol/server';
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 
 describe('parseSchemaResponse', () => {
 	const endpointId = 'endpoint1';
@@ -122,6 +128,22 @@ describe('parseSchemaResponse', () => {
 	});
 
 	describe('array format schema', () => {
+		it('preserves MCP App metadata', () => {
+			const result = parseSchemaResponse(
+				[
+					{
+						name: 'app_tool',
+						inputSchema: { type: 'object' },
+						_meta: { ui: { resourceUri: 'ui://upstream/app.html' } },
+					},
+				],
+				endpointId,
+				subdomain
+			);
+
+			expect(result[0]?._meta).toEqual({ ui: { resourceUri: 'ui://upstream/app.html' } });
+		});
+
 		it('should parse array format schema and return all tools', () => {
 			const schemaTwo = [
 				{
@@ -272,6 +294,67 @@ describe('parseSchemaResponse', () => {
 
 			expect(() => parseSchemaResponse(invalidSchema, endpointId, subdomain)).toThrow('No tools found in schema');
 		});
+	});
+});
+
+describe('registerRemoteTools', () => {
+	it('proxies advertised MCP Apps without injecting OpenAI widget metadata', async () => {
+		const server = new McpServer({ name: 'gradio-app-test', version: '1.0.0' });
+		const connection: EndpointConnection = {
+			endpointId: 'gradio_owner-space',
+			originalIndex: 0,
+			client: null,
+			name: 'owner/space',
+			mcpUrl: 'https://owner-space.hf.space/gradio_api/mcp/',
+			tools: [
+				{
+					name: 'first',
+					description: 'First app tool',
+					inputSchema: { type: 'object', properties: {} },
+					_meta: {
+						ui: {
+							resourceUri: 'ui://upstream/app.html',
+							csp: { connectSrc: ['https://huggingface.co'] },
+						},
+					},
+				},
+				{
+					name: 'second',
+					description: 'Second app tool',
+					inputSchema: { type: 'object', properties: {} },
+					_meta: { ui: { resourceUri: 'ui://upstream/app.html' } },
+				},
+			],
+		};
+		registerRemoteTools(server, connection, undefined, {
+			clientInfo: { name: 'openai-mcp', version: '1.0.0' },
+		});
+
+		const client = new Client({ name: 'test-client', version: '1.0.0' });
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+		await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+		try {
+			const tools = (await client.listTools()).tools;
+			const resources = (await client.listResources()).resources;
+			const resourceUri = resources[0]?.uri.toString();
+
+			expect(tools).toHaveLength(2);
+			expect(resources).toHaveLength(1);
+			expect(resourceUri).toMatch(/^ui:\/\/hf-mcp-proxy\/gradio-gradio_owner-space\//);
+			expect(resources[0]?.mimeType).toBe('text/html;profile=mcp-app');
+			expect(tools[0]?._meta).toEqual({
+				ui: {
+					resourceUri,
+					csp: { connectSrc: ['https://huggingface.co'] },
+				},
+			});
+			expect(tools[0]?._meta).not.toHaveProperty('openai/outputTemplate');
+			expect(tools[1]?._meta).not.toHaveProperty('openai/outputTemplate');
+		} finally {
+			await client.close();
+			await server.close();
+		}
 	});
 });
 

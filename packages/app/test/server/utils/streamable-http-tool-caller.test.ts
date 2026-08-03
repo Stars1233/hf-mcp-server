@@ -31,7 +31,10 @@ vi.mock('../../../src/server/utils/logger.js', () => ({
 	},
 }));
 
-import { callStreamableHttpTool } from '../../../src/server/utils/streamable-http-tool-caller.js';
+import {
+	callStreamableHttpTool,
+	readStreamableHttpResource,
+} from '../../../src/server/utils/streamable-http-tool-caller.js';
 
 describe('callStreamableHttpTool', () => {
 	beforeEach(() => {
@@ -63,6 +66,32 @@ describe('callStreamableHttpTool', () => {
 		requestOptions.onprogress(progress);
 		await Promise.resolve();
 		expect(onProgress).toHaveBeenCalledWith(progress);
+		expect(mocks.close).toHaveBeenCalledOnce();
+	});
+});
+
+describe('readStreamableHttpResource', () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mocks.request.mockResolvedValue({
+			contents: [{ uri: 'ui://upstream/app.html', mimeType: 'text/html', text: '<main>App</main>' }],
+		});
+	});
+
+	it('forwards the upstream resource URI and closes the client', async () => {
+		const result = await readStreamableHttpResource(
+			'https://example.com/mcp',
+			'ui://upstream/app.html',
+			'hf_test_token'
+		);
+
+		expect(mocks.request).toHaveBeenCalledWith(
+			{
+				method: 'resources/read',
+				params: { uri: 'ui://upstream/app.html' },
+			}
+		);
+		expect(result.contents[0]?.text).toBe('<main>App</main>');
 		expect(mocks.close).toHaveBeenCalledOnce();
 	});
 });

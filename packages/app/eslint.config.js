@@ -5,7 +5,7 @@ import reactRefresh from 'eslint-plugin-react-refresh';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-	{ ignores: ['dist/**', 'node_modules/**', 'src/server/resources/gradio-widget-content.ts'] },
+	{ ignores: ['dist/**', 'node_modules/**'] },
 
 	// Server-side TypeScript files - use strict config
 	{

@@ -316,7 +316,7 @@ export abstract class BaseTransport {
 		const methodName = body?.method || 'unknown';
 
 		// Always skip for initialize requests
-		if (methodName === 'initialize' || methodName.startsWith('resources/')) {
+		if (methodName === 'initialize') {
 			return true;
 		}
 

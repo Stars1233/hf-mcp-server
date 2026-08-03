@@ -334,6 +334,7 @@ async function fetchSchema(
 						required: inputSchema.required || [],
 						description: inputSchema.description,
 					} as Tool['inputSchema'],
+					_meta: parsedTool._meta,
 				};
 			});
 
