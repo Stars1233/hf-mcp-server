@@ -2,6 +2,7 @@ import pino, { type Logger, type LoggerOptions } from 'pino';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { SERVER_BUILD_SHA, SERVER_VERSION } from '../server-build-info.js';
+import { redactHfTokens, redactSensitiveLogValues } from './hf-dataset-transport.js';
 
 // Feature flags: enable/disable per-log-type; defaults to true
 const QUERY_LOGS_ENABLED = (process.env.LOG_QUERY_EVENTS ?? 'true').toLowerCase() === 'true';
@@ -219,11 +220,12 @@ function logQueryEvent(
 	// Use a stable mcpServerSessionId per process/transport instance
 	const mcpServerSessionId = getMcpServerSessionId();
 	const normalizedDurationMs = options?.durationMs !== undefined ? Math.round(options.durationMs) : undefined;
-	const serializedParameters = JSON.stringify(data);
+	const redactedData = redactSensitiveLogValues(data) as Record<string, unknown>;
+	const serializedParameters = JSON.stringify(redactedData);
 	const requestPayload = {
 		methodName,
 		query,
-		parameters: data,
+		parameters: redactedData,
 	};
 	const normalizedError =
 		options?.error !== undefined && options?.error !== null ? normalizeError(options.error) : null;
@@ -240,7 +242,7 @@ function logQueryEvent(
 		requestId: options?.requestId || null,
 		protocolEra: options?.protocolEra || null,
 		protocolVersion: options?.protocolVersion || null,
-		clientCapabilities: options?.clientCapabilities ? JSON.stringify(options.clientCapabilities) : null,
+		clientCapabilities: options?.clientCapabilities ? stringifyRedacted(options.clientCapabilities) : null,
 		userHash: options?.userHash || null,
 		isAuthenticated: options?.isAuthenticated ?? false,
 		name: options?.clientName || null,
@@ -321,14 +323,14 @@ export function logSystemEvent(
 			ipAddress: options?.ipAddress || null,
 
 			// Full request data for context
-			capabilities: options?.capabilities ? JSON.stringify(options.capabilities) : null,
+			capabilities: options?.capabilities ? stringifyRedacted(options.capabilities) : null,
 			clientSessionId: options?.clientSessionId || null,
 			requestId: options?.requestId || null,
 			protocolEra: options?.protocolEra || null,
 			protocolVersion: options?.protocolVersion || null,
 			userHash: options?.userHash || null,
 			requestJson: options?.requestJson
-				? JSON.stringify(options.requestJson)
+				? stringifyRedacted(options.requestJson)
 				: JSON.stringify({ methodName, sessionId }),
 			mcpServerSessionId,
 		},
@@ -388,7 +390,7 @@ export function logGradioEvent(
 			requestId: options.requestId ?? (options.protocolEra === 'modern' ? sessionId : null),
 			protocolEra: options.protocolEra || null,
 			protocolVersion: options.protocolVersion || null,
-			clientCapabilities: options.clientCapabilities ? JSON.stringify(options.clientCapabilities) : null,
+			clientCapabilities: options.clientCapabilities ? stringifyRedacted(options.clientCapabilities) : null,
 			userHash: options.userHash || null,
 			endpointName, // e.g., "user/repo"
 			name: options.clientName || null,
@@ -408,14 +410,18 @@ export function logGradioEvent(
 
 function normalizeError(error: unknown): string {
 	if (error instanceof Error) {
-		return `${error.name}: ${error.message}`;
+		return redactHfTokens(`${error.name}: ${error.message}`);
 	}
 	if (typeof error === 'string') {
-		return error;
+		return redactHfTokens(error);
 	}
 	try {
-		return JSON.stringify(error);
+		return stringifyRedacted(error);
 	} catch {
-		return String(error);
+		return redactHfTokens(String(error));
 	}
+}
+
+function stringifyRedacted(value: unknown): string {
+	return JSON.stringify(redactSensitiveLogValues(value));
 }
