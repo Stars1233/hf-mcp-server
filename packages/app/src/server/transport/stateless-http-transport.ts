@@ -28,6 +28,7 @@ import { isClientDenied } from '../../shared/client-denylist.js';
 import { getSkillCatalog } from '../skills/skill-catalog-cache.js';
 import { listSkillResources, readSkillResource, readSkillDirectory } from '../skills/skill-resource-data.js';
 import { RESOURCES_DIRECTORY_READ_METHOD } from '../skills/skill-directory-schema.js';
+import { SKILLS_GET_METHOD, SKILLS_LIST_METHOD } from '../skills/skill-method-schema.js';
 import { getProxyToolsConfig } from '../utils/proxy-tools-config.js';
 import { BOUQUET_FALLBACK } from '../../shared/settings.js';
 import { getErrorLogFields } from '../utils/observability.js';
@@ -44,7 +45,8 @@ const RESOURCE_METHODS = new Set([
 	'resources/templates/list',
 	RESOURCES_DIRECTORY_READ_METHOD,
 ]);
-const FULL_SERVER_METHODS = new Set(['tools/list', 'tools/call', 'initialize', ...RESOURCE_METHODS]);
+const SKILL_METHODS = new Set([SKILLS_LIST_METHOD, SKILLS_GET_METHOD]);
+const FULL_SERVER_METHODS = new Set(['tools/list', 'tools/call', 'initialize', ...RESOURCE_METHODS, ...SKILL_METHODS]);
 // Resource-subscription methods we never support (skills are static — nothing to
 // notify `resources/updated` about). Rejected cheaply before any server is built.
 const UNSUPPORTED_SUBSCRIBE_METHODS = new Set(['resources/subscribe', 'resources/unsubscribe']);
@@ -259,7 +261,7 @@ export class StatelessHttpTransport extends BaseTransport {
 			// Denied clients (e.g. cursor-vscode flooding the resource surface) get no
 			// resources: route their resource list/read to the stub responder so the
 			// full Skills server is never built for them.
-			if (RESOURCE_METHODS.has(method) && isClientDenied(clientName, userAgent)) {
+			if ((RESOURCE_METHODS.has(method) || SKILL_METHODS.has(method)) && isClientDenied(clientName, userAgent)) {
 				return false;
 			}
 			return true;

@@ -179,6 +179,14 @@ describe('StatelessHttpTransport', () => {
 			expect(result).toBe(true);
 		});
 
+		it.each(['skills/list', 'skills/get'])('should route %s through the full server', (method) => {
+			expect((transport as any).shouldHandle({ method })).toBe(true);
+		});
+
+		it.each(['skills/list', 'skills/get'])('should deny %s for blocked clients', (method) => {
+			expect((transport as any).shouldHandle({ method }, 'cursor-vscode')).toBe(false);
+		});
+
 		it('should handle resources/templates/list requests for non-openai-mcp clients', () => {
 			const result = (transport as any).shouldHandle({ method: 'resources/templates/list' });
 			expect(result).toBe(true);
