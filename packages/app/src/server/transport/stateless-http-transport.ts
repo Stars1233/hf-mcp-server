@@ -34,6 +34,7 @@ import { BOUQUET_FALLBACK } from '../../shared/settings.js';
 import { getErrorLogFields } from '../utils/observability.js';
 import { isProgressToken } from '../utils/progress-token.js';
 import type { SubscriptionMethod } from '../../shared/transport-metrics.js';
+import { handleServerCardRequest, SERVER_CARD_PATH } from '../server-card.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -487,6 +488,8 @@ export class StatelessHttpTransport extends BaseTransport {
 
 	override initialize(): Promise<void> {
 		this.setupModernHandler();
+
+		this.app.get(SERVER_CARD_PATH, handleServerCardRequest);
 
 		this.app.post('/mcp', async (req: Request, res: Response) => {
 			this.trackRequest();

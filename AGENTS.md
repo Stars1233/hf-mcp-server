@@ -2,10 +2,14 @@
 
 ## Subagents
 
-<!-- fast-agent-subagents -->
+<!-- fast-agent-subagents
 
-Use codexresponses.gpt-5.6-terra?reasoning=high subagents to help with analysis, review and production
-of code when necessary.
+
+Use codexresponses.gpt-5.6-terra?reasoning=high subagents to help with requirements analysis, detailed review and production of code when necessary.
+Prefer codexresponses.gpt-5.6-luna?reasoning=high for general repetitive work, or reading code in preparation
+for deeper analysis or changes.
+
+-->
 
 ## Project Structure & Module Organization
 

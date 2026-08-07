@@ -121,6 +121,8 @@ The Web Application and HTTP Transports start by default on Port 3000.
 
 The StreamableHTTP service is available at `/mcp`. Although not strictly enforced by the specification, this is a common convention.
 
+The public Streamable HTTP deployment serves its MCP Server Card at `/mcp/server-card`. The public card advertises the canonical `https://huggingface.co/mcp` endpoint without authentication-specific query parameters; loopback deployments and explicit non-Hugging Face hosts in `MCP_ALLOWED_HOSTS` advertise their own `/mcp` endpoint. Card responses support cache revalidation with an `ETag`.
+
 The Web Application reports server status and MCP method metrics. Tool selection is resolved independently for each request from the optional Hugging Face user configuration API and the `bouquet`/`mix` query parameters.
 
 ### Running Locally
@@ -194,6 +196,7 @@ docker run -i --rm -e TRANSPORT=stdio -p 3000:3000 -e DEFAULT_HF_TOKEN=hf_xxx hf
 
 The different transport types use the following endpoints:
 - Stateless Streamable HTTP JSON: `/mcp`
+- MCP Server Card for Streamable HTTP JSON: `/mcp/server-card`
 - STDIO: Uses stdin/stdout directly, no HTTP endpoint
 
 ### Environment Variables
