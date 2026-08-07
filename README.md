@@ -146,6 +146,9 @@ All commands above start the Management Web interface on http://localhost:3000/.
 
 This project uses `pnpm` for build and development. Corepack is used to ensure everyone uses the same pnpm version (10.12.3).
 
+Benchmark harnesses, historical results, and optimization plans are maintained
+in the separate [`hf-mcp-optimise`](docs/benchmarking.md) workspace.
+
 ```bash
 # Install dependencies
 pnpm install
