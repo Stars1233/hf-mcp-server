@@ -1,7 +1,6 @@
 import { McpServer, type CallToolResult } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { performance } from 'node:perf_hooks';
-import { whoAmI } from '@huggingface/hub';
 import {
 	RepoSearchTool,
 	REPO_SEARCH_TOOL_CONFIG,
@@ -56,6 +55,10 @@ import { SERVER_VERSION } from './server-build-info.js';
 import { parseDisabledTools } from './utils/disabled-tools.js';
 import { createProgressRelay } from './utils/progress-relay.js';
 import { getToolResultErrorMessage } from './utils/observability.js';
+import { AUTHENTICATION_UNVERIFIED_GUIDANCE, createHfWhoamiOutput, formatHfWhoamiMarkdown } from './utils/hf-whoami.js';
+import { fetchHfWhoami } from './utils/hf-whoami-client.js';
+import { hfWhoamiOutputSchema } from './output-schemas/hf-whoami-output-schema.js';
+import { MCP_SERVER_NAME } from './server-card.js';
 
 // Bouquet configurations moved to tool-selection-strategy.ts
 
@@ -101,13 +104,16 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 			userInfo = `Hugging Face tools are being used by authenticated user '${userDetails.name}'`;
 		} else if (hfToken && headers === null) {
 			try {
-				userDetails = await whoAmI({ credentials: { accessToken: hfToken } });
+				userDetails = await fetchHfWhoami(hfToken);
 				username = userDetails.name;
 				userInfo = `Hugging Face tools are being used by authenticated user '${userDetails.name}'`;
 			} catch (error) {
 				// unexpected - this should have been caught upstream so severity is warn
 				logger.warn({ error: (error as Error).message }, `Failed to authenticate with Hugging Face API`);
 			}
+		}
+		if (!userDetails && hfToken) {
+			userInfo = AUTHENTICATION_UNVERIFIED_GUIDANCE;
 		}
 
 		// Helper function to build logging options
@@ -201,7 +207,7 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 
 		const server = new McpServer(
 			{
-				name: '@huggingface/mcp-services',
+				name: MCP_SERVER_NAME,
 				version: SERVER_VERSION,
 				title: 'Hugging Face',
 				websiteUrl: 'https://huggingface.co/mcp',
@@ -232,11 +238,9 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 		const noImageContentHeaderEnabled =
 			typeof rawNoImageHeader === 'string' && rawNoImageHeader.trim().toLowerCase() === 'true';
 
-		const whoDescription = userDetails
-			? `Hugging Face tools are being used by authenticated user '${username}'`
-			: 'Hugging Face tools are being used anonymously and may be rate limited. Call this tool for instructions on joining and authenticating.';
+		const whoDescription =
+			'Inspect the current Hugging Face authentication context, including the account, visible organization memberships, and credential access details. Read-only and never returns credential values.';
 
-		const response = userDetails ? `You are authenticated as ${username ?? 'unknown'}.` : CONFIG_GUIDANCE;
 		if (shouldRegisterFixedTool('hf_whoami')) {
 			server.registerTool(
 				'hf_whoami',
@@ -244,10 +248,15 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 					title: 'Hugging Face User Info',
 					description: whoDescription,
 					inputSchema: z.object({}),
+					outputSchema: hfWhoamiOutputSchema,
 					annotations: { readOnlyHint: true, openWorldHint: false, title: 'Hugging Face User Info' },
 				},
 				() => {
-					return { content: [{ type: 'text', text: response }] };
+					const result = createHfWhoamiOutput(userDetails, hfToken, CONFIG_GUIDANCE);
+					return {
+						structuredContent: { ...result },
+						content: [{ type: 'text', text: formatHfWhoamiMarkdown(result) }],
+					};
 				}
 			);
 		}

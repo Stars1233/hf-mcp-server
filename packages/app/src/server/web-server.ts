@@ -14,6 +14,7 @@ import { gradioMetrics } from './utils/gradio-metrics.js';
 import { formatCacheMetricsForAPI } from './utils/gradio-cache.js';
 import { inboundRequestSecurityMiddleware } from './utils/inbound-request-security.js';
 import { matchesCorsOrigin, normalizeCorsOrigin } from './utils/cors-origin.js';
+import { isServerCardRequestUrl, SERVER_CARD_PATH } from './server-card.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -49,7 +50,11 @@ export class WebServer {
 			next();
 		});
 
-		this.app.use(['/mcp', '/api'], inboundRequestSecurityMiddleware);
+		this.app.use(['/mcp', '/api'], (req, res, next) => {
+			inboundRequestSecurityMiddleware(req, res, next, {
+				allowAnyOrigin: this.isPublicServerCardRequest(req.originalUrl),
+			});
+		});
 
 		// Global CORS for all routes (API + MCP endpoints)
 		// Simple exact-match allowlist with optional env override
@@ -87,13 +92,30 @@ export class WebServer {
 			exposedHeaders: CORS_EXPOSED_HEADERS,
 		};
 
-		this.app.use(cors(corsOptions));
+		const defaultCors = cors(corsOptions);
+		const serverCardCors = cors({
+			origin: '*',
+			methods: ['GET'],
+			allowedHeaders: ['Content-Type', 'If-None-Match'],
+			exposedHeaders: ['ETag'],
+			maxAge: 86400,
+		});
+		const applyCors = (req: express.Request, res: express.Response, next: express.NextFunction): void => {
+			const middleware = this.isPublicServerCardRequest(req.originalUrl) ? serverCardCors : defaultCors;
+			middleware(req, res, next);
+		};
+
+		this.app.use(applyCors);
 		// Ensure preflight requests succeed for any path
-		this.app.options('{*splat}', cors(corsOptions));
+		this.app.options('{*splat}', applyCors);
 	}
 
 	public getApp(): Express {
 		return this.app;
+	}
+
+	private isPublicServerCardRequest(originalUrl: string): boolean {
+		return this.transportInfo.transport === 'streamableHttpJson' && isServerCardRequestUrl(originalUrl);
 	}
 
 	public setTransportInfo(info: TransportInfo): void {
@@ -185,6 +207,10 @@ export class WebServer {
 
 			// Fallback to index.html for SPA routing
 			this.app.get('{*splat}', (req, res) => {
+				if (req.path === SERVER_CARD_PATH) {
+					res.sendStatus(404);
+					return;
+				}
 				if (!req.path.startsWith('/api/')) {
 					res.sendFile(path.join(staticPath, 'index.html'));
 				}

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebServer } from '../../src/server/web-server.js';
 import type { BaseTransport, SessionMetadata } from '../../src/server/transport/base-transport.js';
 import { MetricsCounter } from '../../src/shared/transport-metrics.js';
+import { SERVER_CARD_PATH } from '../../src/server/server-card.js';
 
 function listen(server: Server): Promise<void> {
 	return new Promise((resolve, reject) => {
@@ -63,12 +64,10 @@ describe('WebServer', () => {
 		const webServer = new WebServer();
 		webServers.push(webServer);
 		const getSessions = vi.fn(() => [testSession()]);
-		webServer.setTransport(
-			{
-				getMetrics: () => new MetricsCounter().getMetrics(),
-				getSessions,
-			} as unknown as BaseTransport
-		);
+		webServer.setTransport({
+			getMetrics: () => new MetricsCounter().getMetrics(),
+			getSessions,
+		} as unknown as BaseTransport);
 		webServer.setTransportInfo({
 			transport: 'streamableHttpJson',
 			defaultHfTokenSet: false,
@@ -90,12 +89,10 @@ describe('WebServer', () => {
 		const webServer = new WebServer();
 		webServers.push(webServer);
 		const getSessions = vi.fn(() => [testSession()]);
-		webServer.setTransport(
-			{
-				getMetrics: () => new MetricsCounter().getMetrics(),
-				getSessions,
-			} as unknown as BaseTransport
-		);
+		webServer.setTransport({
+			getMetrics: () => new MetricsCounter().getMetrics(),
+			getSessions,
+		} as unknown as BaseTransport);
 		webServer.setTransportInfo({
 			transport: 'stdio',
 			defaultHfTokenSet: false,
@@ -111,6 +108,30 @@ describe('WebServer', () => {
 		expect(response.status).toBe(200);
 		expect(body.sessions).toEqual([expect.objectContaining({ id: 'session-1' })]);
 		expect(getSessions).toHaveBeenCalledOnce();
+	});
+
+	it('does not expose Server Card discovery in STDIO mode', async () => {
+		const webServer = new WebServer();
+		webServers.push(webServer);
+		webServer.setTransportInfo({
+			transport: 'stdio',
+			defaultHfTokenSet: false,
+			externalApiMode: false,
+			stdioClient: null,
+		});
+		await webServer.setupStaticFiles(false);
+		await webServer.start(0);
+
+		const cardUrl = `http://localhost:${webServerPort(webServer).toString()}${SERVER_CARD_PATH}`;
+		const response = await fetch(cardUrl);
+		expect(response.status).toBe(404);
+		expect(response.headers.get('content-type')).not.toContain('text/html');
+
+		const crossOriginResponse = await fetch(cardUrl, {
+			headers: { Origin: 'https://catalog-client.example' },
+		});
+		expect(crossOriginResponse.status).toBe(403);
+		expect(crossOriginResponse.headers.get('access-control-allow-origin')).not.toBe('*');
 	});
 });
 
