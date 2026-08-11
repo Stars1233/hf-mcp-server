@@ -15,12 +15,23 @@ import { formatCacheMetricsForAPI } from './utils/gradio-cache.js';
 import { inboundRequestSecurityMiddleware } from './utils/inbound-request-security.js';
 import { matchesCorsOrigin, normalizeCorsOrigin } from './utils/cors-origin.js';
 import { isServerCardRequestUrl, SERVER_CARD_PATH } from './server-card.js';
+import {
+	createMetricsPageAuth,
+	METRICS_PAGE_AUTH_COOKIE_NAME,
+	METRICS_PAGE_AUTH_TTL_MS,
+	type MetricsPageAuth,
+} from './utils/metrics-page-auth.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+export interface WebServerOptions {
+	metricsPageAuth?: MetricsPageAuth;
+}
 
 export class WebServer {
 	private app: Express;
 	private server: Server | null = null;
+	private readonly metricsPageAuth: MetricsPageAuth;
 	private transportInfo: TransportInfo = {
 		transport: 'unknown',
 		defaultHfTokenSet: false,
@@ -29,7 +40,8 @@ export class WebServer {
 	};
 	private transport?: BaseTransport;
 
-	constructor() {
+	constructor(options: WebServerOptions = {}) {
+		this.metricsPageAuth = options.metricsPageAuth ?? createMetricsPageAuth(process.env.METRICS_PAGE_PASSWORD);
 		this.app = express() as Express;
 		this.setupMiddleware();
 	}
@@ -108,6 +120,77 @@ export class WebServer {
 		this.app.use(applyCors);
 		// Ensure preflight requests succeed for any path
 		this.app.options('{*splat}', applyCors);
+
+		this.app.get('/', (_req, res) => {
+			res.redirect(302, '/mcp');
+		});
+
+		this.setupMetricsPageAuth();
+	}
+
+	private setupMetricsPageAuth(): void {
+		if (!this.metricsPageAuth.enabled) {
+			return;
+		}
+
+		this.app.get('/metrics/login', (req, res) => {
+			res.setHeader('Cache-Control', 'no-store');
+			if (this.metricsPageAuth.isSessionCookieValid(req.get('cookie'))) {
+				res.redirect(302, '/metrics');
+				return;
+			}
+
+			res.type('html').send(renderMetricsLoginPage(false));
+		});
+
+		this.app.post('/api/metrics/login', express.urlencoded({ extended: false, limit: '8kb' }), (req, res) => {
+			res.setHeader('Cache-Control', 'no-store');
+			const body = req.body as { password?: unknown };
+			if (!this.metricsPageAuth.isPasswordValid(body.password)) {
+				res.status(401).type('html').send(renderMetricsLoginPage(true));
+				return;
+			}
+
+			const token = this.metricsPageAuth.createSessionToken();
+			if (!token) {
+				res.sendStatus(500);
+				return;
+			}
+
+			res.cookie(METRICS_PAGE_AUTH_COOKIE_NAME, token, {
+				httpOnly: true,
+				maxAge: METRICS_PAGE_AUTH_TTL_MS,
+				path: '/',
+				sameSite: 'lax',
+				secure: req.secure,
+			});
+			res.redirect(303, '/metrics');
+		});
+
+		this.app.use('/api', (req, res, next) => {
+			res.setHeader('Cache-Control', 'no-store, private');
+			const isAuthenticated = this.metricsPageAuth.isRequestAuthenticated({
+				cookieHeader: req.get('cookie'),
+				headerPassword: req.get('X-Metrics-Password'),
+				queryPassword: req.query.metrics_password,
+			});
+			if (isAuthenticated) {
+				next();
+				return;
+			}
+
+			res.status(401).json({ error: 'Metrics page authentication required' });
+		});
+
+		this.app.use((req, res, next) => {
+			if (isMetricsPageAuthExemptPath(req.path) || this.metricsPageAuth.isSessionCookieValid(req.get('cookie'))) {
+				next();
+				return;
+			}
+
+			res.setHeader('Cache-Control', 'no-store');
+			res.redirect(302, '/metrics/login');
+		});
 	}
 
 	public getApp(): Express {
@@ -345,4 +428,57 @@ export class WebServer {
 			}
 		});
 	}
+}
+
+function isMetricsPageAuthExemptPath(requestPath: string): boolean {
+	return (
+		requestPath === '/metrics/login' ||
+		requestPath === '/api' ||
+		requestPath.startsWith('/api/') ||
+		requestPath === '/mcp' ||
+		requestPath.startsWith('/mcp/')
+	);
+}
+
+function renderMetricsLoginPage(showError: boolean): string {
+	const error = showError ? '<p class="error" role="alert">The password was not accepted. Please try again.</p>' : '';
+
+	return `<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>MCP Operations</title>
+		<style>
+			:root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+			body { display: grid; min-height: 100vh; margin: 0; place-items: center; background: #f7f7f8; color: #171717; }
+			main { width: min(24rem, calc(100% - 2rem)); box-sizing: border-box; padding: 2rem; border: 1px solid #dedede; border-radius: 1rem; background: white; box-shadow: 0 1rem 3rem rgb(0 0 0 / 8%); }
+			h1 { margin: 0 0 .5rem; font-size: 1.4rem; }
+			p { margin: 0 0 1.25rem; color: #666; line-height: 1.5; }
+			label { display: block; margin-bottom: .45rem; font-size: .9rem; font-weight: 600; }
+			input, button { width: 100%; box-sizing: border-box; border-radius: .6rem; font: inherit; }
+			input { padding: .75rem; border: 1px solid #bdbdbd; background: white; color: #171717; }
+			button { margin-top: 1rem; padding: .75rem; border: 0; background: #ffb000; color: #171717; font-weight: 700; cursor: pointer; }
+			.error { padding: .75rem; border-radius: .6rem; background: #fee2e2; color: #991b1b; font-size: .9rem; }
+			@media (prefers-color-scheme: dark) {
+				body { background: #111; color: #f5f5f5; }
+				main { border-color: #333; background: #1b1b1b; }
+				p { color: #aaa; }
+				input { border-color: #555; background: #111; color: #f5f5f5; }
+			}
+		</style>
+	</head>
+	<body>
+		<main>
+			<h1>MCP Operations</h1>
+			<p>Enter the shared password to view the transport metrics dashboard.</p>
+			${error}
+			<form method="post" action="/api/metrics/login">
+				<label for="password">Password</label>
+				<input id="password" name="password" type="password" autocomplete="current-password" required autofocus />
+				<button type="submit">View metrics</button>
+			</form>
+		</main>
+	</body>
+</html>`;
 }
