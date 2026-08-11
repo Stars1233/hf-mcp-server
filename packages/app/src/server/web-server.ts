@@ -143,7 +143,7 @@ export class WebServer {
 			res.type('html').send(renderMetricsLoginPage(false));
 		});
 
-		this.app.post('/api/metrics/login', express.urlencoded({ extended: false, limit: '8kb' }), (req, res) => {
+		this.app.post('/metrics/login', express.urlencoded({ extended: false, limit: '8kb' }), (req, res) => {
 			res.setHeader('Cache-Control', 'no-store');
 			const body = req.body as { password?: unknown };
 			if (!this.metricsPageAuth.isPasswordValid(body.password)) {
@@ -473,7 +473,7 @@ function renderMetricsLoginPage(showError: boolean): string {
 			<h1>MCP Operations</h1>
 			<p>Enter the shared password to view the transport metrics dashboard.</p>
 			${error}
-			<form method="post" action="/api/metrics/login">
+			<form method="post" action="/metrics/login">
 				<label for="password">Password</label>
 				<input id="password" name="password" type="password" autocomplete="current-password" required autofocus />
 				<button type="submit">View metrics</button>

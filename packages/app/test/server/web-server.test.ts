@@ -214,12 +214,12 @@ describe('WebServer', () => {
 		const loginPage = await loginPageResponse.text();
 		expect(loginPageResponse.status).toBe(200);
 		expect(loginPageResponse.headers.get('cache-control')).toBe('no-store');
-		expect(loginPage).toContain('action="/api/metrics/login"');
+		expect(loginPage).toContain('action="/metrics/login"');
 		expect(loginPage).toContain('type="password"');
 		expect(loginPage).not.toContain(METRICS_PASSWORD);
 
 		const invalidPassword = 'wrong-password-must-not-be-reflected';
-		const invalidResponse = await fetch(`${baseUrl}/api/metrics/login`, {
+		const invalidResponse = await fetch(`${baseUrl}/metrics/login`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
 			body: new URLSearchParams({ password: invalidPassword }),
@@ -230,9 +230,12 @@ describe('WebServer', () => {
 		expect(invalidResponse.headers.get('set-cookie')).toBeNull();
 		expect(invalidPage).not.toContain(invalidPassword);
 
-		const loginResponse = await fetch(`${baseUrl}/api/metrics/login`, {
+		const loginResponse = await fetch(`${baseUrl}/metrics/login`, {
 			method: 'POST',
-			headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+			headers: {
+				'Content-Type': 'application/x-www-form-urlencoded',
+				Origin: 'null',
+			},
 			body: new URLSearchParams({ password: METRICS_PASSWORD }),
 			redirect: 'manual',
 		});
@@ -276,7 +279,7 @@ describe('WebServer', () => {
 		webServers.push(webServer);
 		await webServer.start(0);
 
-		const response = await fetch(`http://localhost:${webServerPort(webServer).toString()}/api/metrics/login`, {
+		const response = await fetch(`http://localhost:${webServerPort(webServer).toString()}/metrics/login`, {
 			method: 'POST',
 			headers: {
 				'Content-Type': 'application/x-www-form-urlencoded',
