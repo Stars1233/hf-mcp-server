@@ -5,6 +5,7 @@ import { StatelessHttpTransport } from '../../src/server/transport/stateless-htt
 import type { ServerFactory } from '../../src/server/transport/base-transport.js';
 import { SERVER_CARD_MEDIA_TYPE, SERVER_CARD_PATH, buildServerCard } from '../../src/server/server-card.js';
 import { SERVER_VERSION } from '../../src/server/server-build-info.js';
+import { createMetricsPageAuth } from '../../src/server/utils/metrics-page-auth.js';
 
 function webServerPort(webServer: WebServer): number {
 	const server = (webServer as unknown as { server: Server | null }).server;
@@ -23,7 +24,7 @@ describe('MCP Server Card', () => {
 	let baseUrl: string;
 
 	beforeEach(async () => {
-		webServer = new WebServer();
+		webServer = new WebServer({ metricsPageAuth: createMetricsPageAuth('metrics-page-test-password') });
 		webServer.setTransportInfo({
 			transport: 'streamableHttpJson',
 			defaultHfTokenSet: false,
@@ -71,6 +72,11 @@ describe('MCP Server Card', () => {
 		expect(card).not.toHaveProperty('packages');
 		expect(card.remotes?.[0]).not.toHaveProperty('headers');
 		expect(serverFactory).not.toHaveBeenCalled();
+
+		const mcpResponse = await fetch(`${baseUrl}/mcp`, { redirect: 'manual' });
+		expect(mcpResponse.status).not.toBe(401);
+		expect(mcpResponse.status).not.toBe(302);
+		expect(mcpResponse.headers.get('location')).not.toBe('/metrics/login');
 	});
 
 	it('returns a stable ETag and honors If-None-Match', async () => {
