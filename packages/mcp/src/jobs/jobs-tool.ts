@@ -436,6 +436,7 @@ Call this tool with:
  */
 export const HF_JOBS_TOOL_CONFIG = {
 	name: 'hf_jobs',
+	title: 'Hugging Face Jobs',
 	description:
 		'Remote compute for Hugging Face workflows. Run Python/UV or Docker jobs to deeply analyze Hub datasets, repos, traces, models, and large files; compute trends/statistics; run batch inference/evaluation; or perform long-running work with installed libraries. ' +
 		'Use for dataset/repo analysis prompts when local chat inspection is insufficient. Includes submit, logs, inspect, cancel, schedule, and volume mounting.',
@@ -447,7 +448,9 @@ export const HF_JOBS_TOOL_CONFIG = {
 		args: z.record(z.string(), z.unknown()).optional().describe('Operation-specific arguments as a JSON object'),
 	}),
 	annotations: {
-		title: 'Hugging Face Jobs', // omit destructive hint.
+		title: 'Hugging Face Jobs',
+		destructiveHint: true,
+		idempotentHint: false,
 		readOnlyHint: false,
 		openWorldHint: true,
 	},

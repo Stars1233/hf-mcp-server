@@ -50,9 +50,11 @@ export const HUB_REPO_DETAILS_TOOL_CONFIG = {
 			.describe('Row count for dataset_preview. Defaults to 5 and is clamped to 1-100.'),
 	}),
 	annotations: {
+		title: 'Hub Repository Details',
 		destructiveHint: false,
+		idempotentHint: false,
 		readOnlyHint: true,
-		openWorldHint: false,
+		openWorldHint: true,
 	},
 } as const;
 

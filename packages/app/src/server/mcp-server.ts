@@ -249,7 +249,13 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 					description: whoDescription,
 					inputSchema: z.object({}),
 					outputSchema: hfWhoamiOutputSchema,
-					annotations: { readOnlyHint: true, openWorldHint: false, title: 'Hugging Face User Info' },
+					annotations: {
+						title: 'Hugging Face User Info',
+						destructiveHint: false,
+						idempotentHint: false,
+						readOnlyHint: true,
+						openWorldHint: false,
+					},
 				},
 				() => {
 					const result = createHfWhoamiOutput(userDetails, hfToken, CONFIG_GUIDANCE);
@@ -265,7 +271,7 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 			server.registerTool(
 				REPO_SEARCH_TOOL_CONFIG.name,
 				{
-					title: REPO_SEARCH_TOOL_CONFIG.annotations.title,
+					title: REPO_SEARCH_TOOL_CONFIG.title,
 					description: REPO_SEARCH_TOOL_CONFIG.description,
 					inputSchema: REPO_SEARCH_TOOL_CONFIG.schema,
 					annotations: REPO_SEARCH_TOOL_CONFIG.annotations,
@@ -301,7 +307,7 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 			server.registerTool(
 				createRepoToolConfig.name,
 				{
-					title: createRepoToolConfig.annotations.title,
+					title: createRepoToolConfig.title,
 					description: createRepoToolConfig.description,
 					inputSchema: createRepoToolConfig.schema,
 					outputSchema: createRepoToolConfig.outputSchema,
@@ -350,6 +356,7 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 			server.registerTool(
 				HUB_REPO_DETAILS_TOOL_CONFIG.name,
 				{
+					title: HUB_REPO_DETAILS_TOOL_CONFIG.title,
 					description: hubInspectDescription,
 					inputSchema: z.object(hubInspectSchemaShape),
 					annotations: HUB_REPO_DETAILS_TOOL_CONFIG.annotations,
@@ -506,7 +513,7 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 			server.registerTool(
 				HF_JOBS_TOOL_CONFIG.name,
 				{
-					title: HF_JOBS_TOOL_CONFIG.annotations.title,
+					title: HF_JOBS_TOOL_CONFIG.title,
 					description: HF_JOBS_TOOL_CONFIG.description,
 					inputSchema: HF_JOBS_TOOL_CONFIG.schema,
 					annotations: HF_JOBS_TOOL_CONFIG.annotations,
@@ -686,7 +693,7 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 			server.registerTool(
 				dynamicSpaceToolConfig.name,
 				{
-					title: dynamicSpaceToolConfig.annotations.title,
+					title: dynamicSpaceToolConfig.title,
 					description: dynamicSpaceToolConfig.description,
 					inputSchema: dynamicSpaceToolConfig.schema,
 					annotations: dynamicSpaceToolConfig.annotations,

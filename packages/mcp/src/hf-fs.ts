@@ -79,7 +79,11 @@ export const HF_FS_TOOL_CONFIG = {
 	schema: HF_FS_SCHEMA,
 	outputSchema: createHfFsOutputSchema(),
 	annotations: {
+		title:
+			'Hugging Face Hub: Find, use and view models, datasets, spaces, buckets, papers, documentation and collections. ' +
+			'Get daily papers reports, and browse trending content. ',
 		destructiveHint: false,
+		idempotentHint: false,
 		readOnlyHint: true,
 		openWorldHint: true,
 	},

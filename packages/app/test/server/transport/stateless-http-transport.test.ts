@@ -422,8 +422,16 @@ describe('StatelessHttpTransport', () => {
 				server.registerTool(
 					'progress_test',
 					{
+						title: 'Progress Test',
 						description: 'Emits progress for modern transport testing.',
 						inputSchema: z.object({}),
+						annotations: {
+							title: 'Progress Test',
+							destructiveHint: false,
+							idempotentHint: false,
+							readOnlyHint: true,
+							openWorldHint: false,
+						},
 					},
 					async (_params, ctx) => {
 						await createProgressRelay(ctx)?.({ progress: 1, total: 2, message: 'Modern halfway' });
@@ -526,8 +534,16 @@ describe('StatelessHttpTransport', () => {
 				server.registerTool(
 					'progress_test',
 					{
+						title: 'Progress Test',
 						description: 'Emits progress for transport testing.',
 						inputSchema: z.object({}),
+						annotations: {
+							title: 'Progress Test',
+							destructiveHint: false,
+							idempotentHint: false,
+							readOnlyHint: true,
+							openWorldHint: false,
+						},
 					},
 					async (_params, ctx) => {
 						await createProgressRelay(ctx)?.({ progress: 1, total: 2, message: 'Halfway' });
