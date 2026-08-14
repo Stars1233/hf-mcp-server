@@ -19,7 +19,7 @@
 		}
 	},
 	"scripts": {
-		"build": "tsc --declaration",
+		"build": "rimraf dist && tsc --declaration",
 		"test": "vitest run",
 		"dev": "tsc --watch",
 		"typecheck": "tsc --noEmit",

@@ -385,50 +385,20 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 			);
 		}
 
-		// Compute README availability; adjust description and schema accordingly
-		const hubInspectReadmeAllowed = toolSelection.behaviorFlags.allowReadmeInclude;
-		const hubInspectDescription = hubInspectReadmeAllowed
-			? `${HUB_REPO_DETAILS_TOOL_CONFIG.description} README file may be requested from the external repository.`
-			: HUB_REPO_DETAILS_TOOL_CONFIG.description;
-		const hubInspectBaseShape = HUB_REPO_DETAILS_TOOL_CONFIG.schema.shape as z.ZodRawShape;
-		const hubInspectSchemaShape: z.ZodRawShape = hubInspectReadmeAllowed
-			? hubInspectBaseShape
-			: (() => {
-					const { include_readme: _omit, ...rest } = hubInspectBaseShape as unknown as Record<string, unknown>;
-					return rest as unknown as z.ZodRawShape;
-				})();
-
 		if (shouldRegisterSelectedTool(HUB_REPO_DETAILS_TOOL_CONFIG.name)) {
 			server.registerTool(
 				HUB_REPO_DETAILS_TOOL_CONFIG.name,
 				{
 					title: HUB_REPO_DETAILS_TOOL_CONFIG.title,
-					description: hubInspectDescription,
-					inputSchema: z.object(hubInspectSchemaShape),
+					description: HUB_REPO_DETAILS_TOOL_CONFIG.description,
+					inputSchema: HUB_REPO_DETAILS_TOOL_CONFIG.schema,
 					annotations: HUB_REPO_DETAILS_TOOL_CONFIG.annotations,
 				},
-				async (params: Record<string, unknown>) => {
-					const wantReadme = (params as { include_readme?: boolean }).include_readme === true; // explicit opt-in required
-					const includeReadme = hubInspectReadmeAllowed && wantReadme;
-
+				async (params: HubInspectParams) => {
 					// Prepare safe logging parameters without relying on strong typing
-					const repoIdsParam = (params as { repo_ids?: unknown }).repo_ids;
-					const repoIds = Array.isArray(repoIdsParam)
-						? repoIdsParam.filter((repoId): repoId is string => typeof repoId === 'string')
-						: [];
+					const repoIds = params.repo_ids;
 					const joinedRepoIds = repoIds.join(', ');
 					const loggedRepoIds = joinedRepoIds.length > 500 ? `${joinedRepoIds.slice(0, 497)}...` : joinedRepoIds;
-					const repoType = (params as { repo_type?: unknown }).repo_type as unknown;
-					const repoTypeSafe =
-						repoType === 'model' || repoType === 'dataset' || repoType === 'space' ? repoType : undefined;
-					const operationsParam = (params as { operations?: unknown }).operations;
-					const operations = Array.isArray(operationsParam)
-						? operationsParam.filter((operation): operation is string => typeof operation === 'string')
-						: undefined;
-					const config = (params as { config?: unknown }).config;
-					const split = (params as { split?: unknown }).split;
-					const offset = (params as { offset?: unknown }).offset;
-					const limit = (params as { limit?: unknown }).limit;
 
 					const result = await runWithQueryLogging(
 						logToolQuery,
@@ -438,13 +408,12 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 							parameters: {
 								repo_ids: repoIds,
 								count: repoIds.length,
-								repo_type: repoTypeSafe,
-								include_readme: includeReadme,
-								operations,
-								config: typeof config === 'string' ? config : undefined,
-								split: typeof split === 'string' ? split : undefined,
-								offset: typeof offset === 'number' ? offset : undefined,
-								limit: typeof limit === 'number' ? limit : undefined,
+								repo_type: params.repo_type,
+								operations: params.operations,
+								config: params.config,
+								split: params.split,
+								offset: params.offset,
+								limit: params.limit,
 							},
 							baseOptions: getLoggingOptions(),
 							successOptions: (details) => ({
@@ -455,7 +424,7 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 						},
 						async () => {
 							const tool = new HubInspectTool(hfToken, undefined);
-							return tool.inspect(params as unknown as HubInspectParams, includeReadme);
+							return tool.inspect(params);
 						}
 					);
 					return {

@@ -516,6 +516,9 @@ describe('StatelessHttpTransport', () => {
 						},
 					}
 				);
+				await expect(client.callTool({ name: 'hf_fs', arguments: { cmd: 'ls', args: ['hf://'] } })).rejects.toThrow(
+					'Tool hf_fs not found'
+				);
 				await client.close();
 				const mismatchedDiscoveryResponse = await fetch(`http://127.0.0.1:${address.port}/mcp?bouquet=search`, {
 					method: 'POST',
@@ -549,11 +552,12 @@ describe('StatelessHttpTransport', () => {
 				expect(result.content).toEqual([{ type: 'text', text: 'modern done' }]);
 				expect(progress).toEqual([expect.objectContaining({ progress: 1, total: 2, message: 'Modern halfway' })]);
 				expect(factoryCalls.length).toBeGreaterThanOrEqual(2);
-				expect(factoryCalls.every(({ headers }) => headers?.['x-mcp-bouquet'] === 'search')).toBe(true);
 				expect(factoryCalls[0]).toMatchObject({
+					headers: { 'x-mcp-bouquet': 'search' },
 					settings: { builtInTools: expect.any(Array), spaceTools: [] },
 					skipGradio: true,
 				});
+				expect(factoryCalls.at(-1)?.headers).not.toHaveProperty('x-mcp-bouquet');
 				expect(factoryCalls.at(-1)?.sessionInfo).toMatchObject({
 					protocolEra: 'modern',
 					protocolVersion: '2026-07-28',
@@ -562,6 +566,7 @@ describe('StatelessHttpTransport', () => {
 					clientInfo: { name: 'modern-contract-test', version: '1.0.0' },
 					requestId: expect.any(String),
 				});
+				expect(factoryCalls.at(-1)?.settings).toEqual({ builtInTools: ['hf_fs'], spaceTools: [] });
 
 				const metrics = transport.getMetrics();
 				expect(metrics.protocolEras.modern).toBeGreaterThanOrEqual(2);
@@ -768,6 +773,34 @@ describe('StatelessHttpTransport', () => {
 					errors: 1,
 				});
 
+				const directKnownToolResponse = await fetch(`http://127.0.0.1:${address.port}/mcp?bouquet=search`, {
+					method: 'POST',
+					headers: {
+						accept: 'application/json, text/event-stream',
+						'content-type': 'application/json',
+						'mcp-session-id': sessionId ?? '',
+					},
+					body: JSON.stringify({
+						jsonrpc: '2.0',
+						id: 5,
+						method: 'tools/call',
+						params: { name: 'hf_fs', arguments: { cmd: 'ls', args: ['hf://'] } },
+					}),
+				});
+				expect(directKnownToolResponse.status).toBe(200);
+				expect(await directKnownToolResponse.json()).toMatchObject({
+					error: { code: -32602, message: 'Tool hf_fs not found' },
+				});
+				expect(serverFactory.mock.calls.at(-1)?.[0]).not.toHaveProperty('x-mcp-bouquet');
+				expect(serverFactory.mock.calls.at(-1)?.[1]).toEqual({
+					builtInTools: ['hf_fs'],
+					spaceTools: [],
+				});
+
+				expect(serverFactory.mock.calls.slice(1).every((factoryCall) => factoryCall[1]?.spaceTools.length === 0)).toBe(
+					true
+				);
+
 				const deleteResponse = await fetch(`http://127.0.0.1:${address.port}/mcp`, {
 					method: 'DELETE',
 					headers: { 'mcp-session-id': sessionId ?? '' },
@@ -827,6 +860,42 @@ describe('StatelessHttpTransport', () => {
 	});
 
 	describe('disabled tools', () => {
+		it('rejects modern disabled calls before dispatch', async () => {
+			process.env.DISABLE_TOOLS = 'hub_repo_search';
+			const mockServerFactory = vi.fn() as unknown as ServerFactory;
+			transport = new StatelessHttpTransport(mockServerFactory, express());
+
+			const req = {
+				headers: {},
+				query: {},
+				body: {
+					jsonrpc: '2.0',
+					id: 1,
+					method: 'tools/call',
+					params: { name: 'hub_repo_search', arguments: { query: 'bert' } },
+				},
+				ip: '127.0.0.1',
+			};
+			const res = {
+				set: vi.fn().mockReturnThis(),
+				status: vi.fn().mockReturnThis(),
+				json: vi.fn().mockReturnThis(),
+				send: vi.fn().mockReturnThis(),
+			};
+
+			await (transport as any).handleModernRequest(req, res);
+
+			expect(mockServerFactory).not.toHaveBeenCalled();
+			expect(res.status).toHaveBeenCalledWith(200);
+			expect(res.json).toHaveBeenCalledWith(
+				expect.objectContaining({
+					error: expect.objectContaining({
+						message: 'Invalid params: Tool hub_repo_search is disabled by server configuration',
+					}),
+				})
+			);
+		});
+
 		it('rejects disabled calls before dispatch and records a dashboard error', async () => {
 			process.env.DISABLE_TOOLS = 'hub_repo_search';
 			const mockServerFactory = vi.fn() as unknown as ServerFactory;

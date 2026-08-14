@@ -13,7 +13,6 @@ export * from './hf-fs-papers.js';
 export * from './hf-fs-docs.js';
 export * from './hf-nav.js';
 export * from './hf-fs-write.js';
-export * from './readme-utils.js';
 export * from './jobs/jobs-tool.js';
 export * from './sandbox-tool.js';
 export * from './space/dynamic-space-tool.js';

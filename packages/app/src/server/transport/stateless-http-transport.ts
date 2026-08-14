@@ -31,10 +31,12 @@ import { RESOURCES_DIRECTORY_READ_METHOD } from '../skills/skill-directory-schem
 import { SKILLS_GET_METHOD, SKILLS_LIST_METHOD } from '../skills/skill-method-schema.js';
 import { getProxyToolsConfig } from '../utils/proxy-tools-config.js';
 import { BOUQUET_FALLBACK } from '../../shared/settings.js';
+import type { AppSettings } from '../../shared/settings.js';
 import { getErrorLogFields } from '../utils/observability.js';
 import { isProgressToken } from '../utils/progress-token.js';
 import type { ServerDiscoverOutcome, SubscriptionMethod } from '../../shared/transport-metrics.js';
 import { handleServerCardRequest, SERVER_CARD_PATH } from '../server-card.js';
+import { getDirectToolCallSettings, withoutDiscoverySelectionHeaders } from '../utils/direct-tool-settings.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -64,6 +66,7 @@ interface JsonRpcRequestBody {
 		capabilities?: unknown;
 		protocolVersion?: unknown;
 		name?: string;
+		arguments?: unknown;
 		notifications?: unknown;
 		_meta?: Record<string, unknown>;
 	};
@@ -71,6 +74,7 @@ interface JsonRpcRequestBody {
 
 interface ModernRequestData {
 	headers: Record<string, string>;
+	factoryHeaders: Record<string, string>;
 	clientInfo?: { name: string; version: string };
 	requestId: string;
 	isAuthenticated: boolean;
@@ -78,6 +82,7 @@ interface ModernRequestData {
 	useFullServer: boolean;
 	skipGradio: boolean;
 	discoveryOnly: boolean;
+	userSettings?: AppSettings;
 	protocolVersion: string;
 	clientCapabilities: Record<string, unknown>;
 	userHash?: string;
@@ -493,8 +498,8 @@ export class StatelessHttpTransport extends BaseTransport {
 				}
 
 				const result = await this.serverFactory(
-					requestData.headers,
-					requestData.discoveryOnly ? BOUQUET_FALLBACK : undefined,
+					requestData.factoryHeaders,
+					requestData.discoveryOnly ? BOUQUET_FALLBACK : requestData.userSettings,
 					requestData.skipGradio,
 					{
 						requestId: requestData.requestId,
@@ -638,6 +643,14 @@ export class StatelessHttpTransport extends BaseTransport {
 			res.status(authResult.statusCode || 401).send('Unauthorized');
 			return;
 		}
+
+		const disabledTool = disabledToolCallName(requestBody);
+		if (disabledTool) {
+			this.trackMethodCall(trackingName, startTime, true, clientInfo);
+			res.status(200).json(JsonRpcErrors.invalidParams(disabledToolMessage(disabledTool), extractJsonRpcId(req.body)));
+			return;
+		}
+
 		this.trackNewConnection();
 		if (clientInfo) {
 			// Modern HTTP is request-scoped. Mark the identity connected only
@@ -672,9 +685,12 @@ export class StatelessHttpTransport extends BaseTransport {
 		}
 
 		const useFullServer = isServerDiscover || this.shouldHandle(requestBody, clientInfo?.name, headers['user-agent']);
-		const skipGradio = isServerDiscover || this.skipGradioSetup(requestBody);
+		const userSettings = isServerDiscover ? undefined : getDirectToolCallSettings(requestBody, headers);
+		const skipGradio = isServerDiscover || userSettings !== undefined || this.skipGradioSetup(requestBody);
+		const factoryHeaders = userSettings !== undefined ? withoutDiscoverySelectionHeaders(headers) : headers;
 		const requestData: ModernRequestData = {
 			headers,
+			factoryHeaders,
 			clientInfo,
 			requestId,
 			isAuthenticated: authResult.userIdentified,
@@ -682,6 +698,7 @@ export class StatelessHttpTransport extends BaseTransport {
 			useFullServer,
 			skipGradio,
 			discoveryOnly: isServerDiscover,
+			userSettings,
 			protocolVersion,
 			clientCapabilities,
 			userHash,
@@ -841,6 +858,8 @@ export class StatelessHttpTransport extends BaseTransport {
 			res.status(200).json(JsonRpcErrors.invalidParams(disabledToolMessage(disabledTool), extractJsonRpcId(req.body)));
 			return;
 		}
+		const directToolSettings = getDirectToolCallSettings(requestBody, headers);
+		const factoryHeaders = directToolSettings !== undefined ? withoutDiscoverySelectionHeaders(headers) : headers;
 
 		// Analytics mode session tracking
 		if (this.analyticsMode) {
@@ -999,7 +1018,7 @@ export class StatelessHttpTransport extends BaseTransport {
 			if (useFullServer) {
 				// Create new server instance using factory with request headers and bouquet
 				// Skip Gradio endpoints for initialize requests or non-Gradio tool calls
-				const skipGradio = this.skipGradioSetup(requestBody);
+				const skipGradio = directToolSettings !== undefined || this.skipGradioSetup(requestBody);
 
 				// Pass session info to server factory for query logging
 				const sessionInfoForLogging = {
@@ -1012,7 +1031,7 @@ export class StatelessHttpTransport extends BaseTransport {
 					clientInfo,
 					authenticatedUser: authResult.authenticatedUser,
 				};
-				const result = await this.serverFactory(headers, undefined, skipGradio, sessionInfoForLogging);
+				const result = await this.serverFactory(factoryHeaders, directToolSettings, skipGradio, sessionInfoForLogging);
 				server = result.server;
 			} else {
 				// Create fresh stub responder for simple requests

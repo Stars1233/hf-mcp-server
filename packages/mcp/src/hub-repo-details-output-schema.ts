@@ -5,7 +5,6 @@ const jsonRecordSchema = z.record(z.string(), z.json());
 const modelMatchSchema = z.object({
 	repo_type: z.literal('model'),
 	overview: jsonRecordSchema,
-	readme: z.string().optional(),
 });
 
 const datasetStructureSchema = z.object({
@@ -40,7 +39,6 @@ const datasetMatchSchema = z.object({
 	overview: jsonRecordSchema.optional(),
 	structure: datasetStructureSchema.optional(),
 	preview: datasetPreviewSchema.optional(),
-	readme: z.string().optional(),
 });
 
 const spaceMatchSchema = z.object({

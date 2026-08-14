@@ -10,6 +10,7 @@ import { extractAuthBouquetAndMix } from '../utils/auth-utils.js';
 import { getMetricsSafeName } from '../utils/gradio-metrics.js';
 import { isGradioTool } from '../utils/gradio-utils.js';
 import { fetchHfWhoami, isHfWhoamiUnauthorizedError, type HfWhoamiResponse } from '../utils/hf-whoami-client.js';
+import { isConfiguredProxyToolName } from '../utils/direct-tool-settings.js';
 
 /**
  * Result returned by ServerFactory containing the server instance and optional user details
@@ -292,6 +293,12 @@ export abstract class BaseTransport {
 		if (methodName === 'tools/call' && body?.params && typeof body.params === 'object' && 'name' in body.params) {
 			const toolName = body.params.name;
 			if (typeof toolName === 'string') {
+				// Exact startup proxy names take precedence over the generated
+				// Gradio alias pattern.
+				if (isConfiguredProxyToolName(toolName)) {
+					return false;
+				}
+
 				// Check for standard Gradio tools (gr<number>_ or grp<number>_)
 				if (isGradioTool(toolName)) {
 					return true;

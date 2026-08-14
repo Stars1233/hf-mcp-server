@@ -207,7 +207,10 @@ The server respects the following environment variables:
 - If running with `stdio` transport, `HF_TOKEN` is used if `DEFAULT_HF_TOKEN` is not set.
 - `MCP_ALLOWED_HOSTS`: Additional comma-separated Host allowlist for MCP and API routes. Loopback hosts `localhost,127.0.0.1,::1` are always allowed. Use exact hostnames or leading wildcard entries such as `*.example.com`.
 - `HF_API_TIMEOUT`: Timeout for Hugging Face API requests in milliseconds (default: 12500ms / 12.5 seconds)
-- `USER_CONFIG_API`: Optional URL for per-user Hugging Face MCP settings. When unset, immutable built-in defaults are used.
+- `USER_CONFIG_API`: Optional URL for the per-user discovery projection returned by `tools/list`, including configured
+  Spaces. These settings control which deployed tools are advertised, not whether a direct `tools/call` to a known tool
+  may execute. Generated Gradio aliases still use the configured Space mapping. When unset, immutable built-in defaults
+  are used.
 - `ALLOW_INTERNAL_ADDRESS_HOSTS`: Optional comma-separated host allowlist to permit internal/reserved DNS resolutions for trusted domains during outbound checks (supports exact hosts and `*.` wildcards, for example: `huggingface.co,*.hf.space`).
 - `MCP_STRICT_COMPLIANCE`: set to True for GET 405 rejects in JSON Mode (default serves a welcome page).
 - `DISABLE_TOOLS`: Optional comma-separated tool names to hide from `tools/list` and reject if called, for example `hub_repo_search,hf_fs`. Rejected calls remain visible as errors in the MCP dashboard tool-call statistics.
@@ -293,5 +296,6 @@ Tool naming depends on how many tools the upstream MCP endpoint returns:
 If an exposed proxy tool name collides with an already-registered tool, the proxy tool is skipped and a warning is
 logged.
 
-You can include these tool names in bouquets or mixes as needed.
-Use `bouquet=proxy` or `mix=proxy` to enable all proxy tools loaded from `PROXY_TOOLS_CSV` (in addition to the base built-in tools).
+You can include these tool names in bouquets or mixes to advertise them through `tools/list`.
+Use `bouquet=proxy` or `mix=proxy` to advertise all proxy tools loaded from `PROXY_TOOLS_CSV` (in addition to the base
+built-in tools). Direct calls to a known startup-configured proxy tool do not depend on that discovery selection.
