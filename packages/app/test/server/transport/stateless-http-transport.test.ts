@@ -4,6 +4,7 @@ import {
 	MAX_METRICS_RESPONSE_CAPTURE_BYTES,
 	MetricsResponseCapture,
 	StatelessHttpTransport,
+	classifyServerDiscoverOutcome,
 	summarizeSubscriptionRequest,
 } from '../../../src/server/transport/stateless-http-transport.js';
 import type { ServerFactory } from '../../../src/server/transport/base-transport.js';
@@ -20,6 +21,7 @@ describe('MetricsResponseCapture', () => {
 		rpcError.add('{"jsonrpc":"2.0","id":1,');
 		rpcError.add('"error":{"code":-32603,"message":"failed"}}');
 		expect(rpcError.isError()).toBe(true);
+		expect(rpcError.summary()).toEqual({ isError: true, jsonRpcErrorCode: -32603 });
 
 		const toolError = new MetricsResponseCapture();
 		toolError.add(
@@ -45,9 +47,50 @@ describe('MetricsResponseCapture', () => {
 		const concatSpy = vi.spyOn(Buffer, 'concat');
 
 		expect(capture.isError()).toBe(false);
+		expect(capture.summary()).toEqual({ isError: false, truncated: true });
 		expect(concatSpy).not.toHaveBeenCalled();
 
 		concatSpy.mockRestore();
+	});
+
+	it('extracts negotiation error codes from JSON, SSE, and batch responses', () => {
+		const json = new MetricsResponseCapture();
+		json.add('{"jsonrpc":"2.0","id":1,"error":{"code":-32020,"message":"mismatch"}}');
+		expect(json.summary()).toEqual({ isError: true, jsonRpcErrorCode: -32020 });
+
+		const sse = new MetricsResponseCapture();
+		sse.add('event: message\ndata: {"jsonrpc":"2.0","id":1,"error":{"code":-32022}}\n\n');
+		expect(sse.summary()).toEqual({ isError: true, jsonRpcErrorCode: -32022 });
+
+		const multilineSse = new MetricsResponseCapture();
+		multilineSse.add(
+			'event: message\n' + 'data: {"jsonrpc":"2.0","id":1,\n' + 'data: "error":{"code":-32603,"message":"failed"}}\n\n'
+		);
+		expect(multilineSse.summary()).toEqual({ isError: true, jsonRpcErrorCode: -32603 });
+
+		const batch = new MetricsResponseCapture();
+		batch.add('[{"jsonrpc":"2.0","id":1,"result":{}},{"jsonrpc":"2.0","id":2,"error":{"code":-32600}}]');
+		expect(batch.summary()).toEqual({ isError: true, jsonRpcErrorCode: -32600 });
+	});
+});
+
+describe('classifyServerDiscoverOutcome', () => {
+	it.each([
+		[200, { isError: false }, 'success'],
+		[400, { isError: true, jsonRpcErrorCode: -32020 }, 'headerBodyMismatch'],
+		[400, { isError: true, jsonRpcErrorCode: -32022 }, 'unsupportedVersion'],
+		[400, { isError: true, jsonRpcErrorCode: -32600 }, 'invalidRequest'],
+		[400, { isError: false }, 'invalidRequest'],
+		[401, { isError: false }, 'authRejected'],
+		[403, { isError: true, jsonRpcErrorCode: -32603 }, 'authRejected'],
+		[500, { isError: false }, 'internalServerError'],
+		[500, { isError: true, jsonRpcErrorCode: -32020 }, 'internalServerError'],
+		[200, { isError: true, jsonRpcErrorCode: -32603 }, 'internalServerError'],
+		[200, { isError: false, truncated: true }, 'otherError'],
+		[200, { isError: true, jsonRpcErrorCode: -32099 }, 'otherError'],
+		[429, { isError: false }, 'otherError'],
+	] as const)('classifies HTTP %i with %o as %s', (httpStatus, response, expected) => {
+		expect(classifyServerDiscoverOutcome({ httpStatus, response })).toBe(expected);
 	});
 });
 
@@ -474,6 +517,34 @@ describe('StatelessHttpTransport', () => {
 					}
 				);
 				await client.close();
+				const mismatchedDiscoveryResponse = await fetch(`http://127.0.0.1:${address.port}/mcp?bouquet=search`, {
+					method: 'POST',
+					headers: {
+						Accept: 'application/json, text/event-stream',
+						'Content-Type': 'application/json',
+						'MCP-Protocol-Version': '2026-07-28',
+						'MCP-Name': 'modern-test',
+					},
+					body: JSON.stringify({
+						jsonrpc: '2.0',
+						id: 'missing-method-header',
+						method: 'server/discover',
+						params: {
+							_meta: {
+								'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+								'io.modelcontextprotocol/clientInfo': {
+									name: 'malformed-modern-client',
+									version: '1.0.0',
+								},
+								'io.modelcontextprotocol/clientCapabilities': {},
+							},
+						},
+					}),
+				});
+				expect(mismatchedDiscoveryResponse.status).toBe(400);
+				await expect(mismatchedDiscoveryResponse.json()).resolves.toMatchObject({
+					error: { code: -32020 },
+				});
 
 				expect(result.content).toEqual([{ type: 'text', text: 'modern done' }]);
 				expect(progress).toEqual([expect.objectContaining({ progress: 1, total: 2, message: 'Modern halfway' })]);
@@ -498,10 +569,12 @@ describe('StatelessHttpTransport', () => {
 				expect(metrics.protocolVersions.get('modern:2026-07-28')).toMatchObject({
 					era: 'modern',
 					version: '2026-07-28',
-					uniqueClients: 1,
+					uniqueClients: 2,
 					unattributedRequests: 0,
 				});
-				expect(metrics.methods.get('server/discover')).toMatchObject({ count: 1, errors: 0 });
+				expect(metrics.methods.get('server/discover')).toMatchObject({ count: 2, errors: 1 });
+				expect(metrics.serverDiscoverOutcomes?.get('success')).toMatchObject({ count: 1 });
+				expect(metrics.serverDiscoverOutcomes?.get('headerBodyMismatch')).toMatchObject({ count: 1 });
 				expect(metrics.methods.get('tools/call:progress_test')).toMatchObject({ count: 1, errors: 0 });
 				expect(Array.from(metrics.clients.values())).toContainEqual(
 					expect.objectContaining({

@@ -1,0 +1,233 @@
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
+import { downloadFile, pathsInfo } from '@huggingface/hub';
+import { Buffer } from 'node:buffer';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createServerFactory } from '../../src/server/mcp-server.js';
+import { McpApiClient } from '../../src/server/utils/mcp-api-client.js';
+import type { TransportInfo } from '../../src/shared/transport-info.js';
+
+vi.mock('@huggingface/hub', async (importOriginal) => {
+	const actual = await importOriginal<typeof import('@huggingface/hub')>();
+	return {
+		...actual,
+		downloadFile: vi.fn(),
+		pathsInfo: vi.fn(),
+	};
+});
+
+const transportInfo: TransportInfo = {
+	transport: 'streamableHttpJson',
+	port: 3000,
+	defaultHfTokenSet: false,
+	externalApiMode: false,
+	stdioClient: null,
+};
+
+describe('hf_fs MCP wiring', () => {
+	beforeEach(() => {
+		vi.mocked(pathsInfo).mockReset();
+		vi.mocked(downloadFile).mockReset();
+	});
+
+	it('returns fixed recovery metadata for deterministic compatibility errors', async () => {
+		const apiClient = new McpApiClient({ type: 'static' }, transportInfo);
+		const factory = createServerFactory(apiClient);
+		const { server } = await factory({}, { builtInTools: [], spaceTools: [] }, true, {});
+		const client = new Client({ name: 'hf-fs-wiring-test', version: '1.0.0' });
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+		await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+		try {
+			const listedTool = (await client.listTools()).tools.find((tool) => tool.name === 'hf_fs');
+			expect(listedTool?.outputSchema).toMatchObject({
+				type: 'object',
+				additionalProperties: false,
+				allOf: [
+					{
+						if: { properties: { op: { const: 'attach' } }, required: ['op'] },
+						then: { required: ['path', 'mime_type', 'bytes'] },
+					},
+				],
+			});
+			const result = await client.callTool({
+				name: 'hf_fs',
+				arguments: { cmd: 'ls', args: ['hf://models', '--sort', 'downloads'] },
+			});
+			expect(result.isError).toBe(true);
+			expect(result.structuredContent).toBeUndefined();
+			expect(result.content).toEqual([
+				{
+					type: 'text',
+					text: expect.stringMatching(/^\[HF_FS_INVALID_ARGUMENT\] EINVAL: sort is not supported.*\nRecovery:/),
+				},
+			]);
+			expect(result._meta).toEqual({
+				'huggingface.co/hf_fs_error': {
+					code: 'HF_FS_INVALID_ARGUMENT',
+					retryable: false,
+				},
+			});
+
+			const unsupported = await client.callTool({
+				name: 'hf_fs',
+				arguments: { cmd: 'find', args: ['hf://'] },
+			});
+			expect(unsupported).toMatchObject({
+				isError: true,
+				_meta: {
+					'huggingface.co/hf_fs_error': {
+						code: 'HF_FS_UNSUPPORTED_OPERATION',
+						retryable: false,
+						suggestedOperation: 'search',
+					},
+				},
+			});
+
+			const notAFile = await client.callTool({
+				name: 'hf_fs',
+				arguments: { cmd: 'cat', args: ['hf://models/org/repo'] },
+			});
+			expect(notAFile).toMatchObject({
+				isError: true,
+				_meta: {
+					'huggingface.co/hf_fs_error': {
+						code: 'HF_FS_NOT_A_FILE',
+						retryable: false,
+						suggestedOperation: 'stat',
+					},
+				},
+			});
+		} finally {
+			await client.close();
+			await server.close();
+		}
+	});
+
+	it('transports an image block without structured bytes or applying the Gradio image flag', async () => {
+		const opaqueBytes = Uint8Array.from([0, 255, 1, 2, 3]);
+		vi.mocked(pathsInfo).mockResolvedValueOnce([{ path: 'images/sample.PNG', type: 'file', size: opaqueBytes.length }]);
+		vi.mocked(downloadFile).mockResolvedValueOnce(new Blob([opaqueBytes]));
+
+		const apiClient = new McpApiClient({ type: 'static' }, transportInfo);
+		const { server } = await createServerFactory(apiClient)(
+			{},
+			{ builtInTools: ['hf_fs', 'NO_GRADIO_IMAGE_CONTENT'], spaceTools: [] },
+			true,
+			{}
+		);
+		const client = new Client({ name: 'hf-fs-wiring-test', version: '1.0.0' });
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+		await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+		try {
+			const result = await client.callTool({
+				name: 'hf_fs',
+				arguments: { cmd: 'attach', args: ['hf://models/org/repo/images/sample.PNG'] },
+			});
+			expect(result.isError).not.toBe(true);
+			expect(result.structuredContent).toEqual({
+				op: 'attach',
+				uri: 'hf://models/org/repo/images/sample.PNG',
+				path: 'images/sample.PNG',
+				mime_type: 'image/png',
+				bytes: opaqueBytes.length,
+			});
+			expect(result.content).toEqual([
+				{
+					type: 'text',
+					text: expect.stringContaining('# hf_fs attach'),
+				},
+				{
+					type: 'image',
+					data: Buffer.from(opaqueBytes).toString('base64'),
+					mimeType: 'image/png',
+				},
+			]);
+			expect(JSON.stringify(result.structuredContent)).not.toContain(Buffer.from(opaqueBytes).toString('base64'));
+			expect(result.structuredContent).not.toHaveProperty('data');
+			expect(pathsInfo).toHaveBeenCalledWith(expect.objectContaining({ fetch: expect.any(Function) }));
+			expect(downloadFile).toHaveBeenCalledWith(expect.objectContaining({ fetch: expect.any(Function) }));
+		} finally {
+			await client.close();
+			await server.close();
+		}
+	});
+
+	it('returns stable attachment integrity recovery metadata for an inconsistent Blob stream', async () => {
+		const cancel = vi.fn();
+		vi.mocked(pathsInfo).mockResolvedValueOnce([{ path: 'image.png', type: 'file', size: 2 }]);
+		vi.mocked(downloadFile).mockResolvedValueOnce({
+			size: 2,
+			stream: () =>
+				new ReadableStream<Uint8Array>({
+					start(controller) {
+						controller.enqueue(Uint8Array.from([1, 2, 3]));
+					},
+					cancel,
+				}),
+		} as unknown as Blob);
+
+		const apiClient = new McpApiClient({ type: 'static' }, transportInfo);
+		const { server } = await createServerFactory(apiClient)({}, { builtInTools: [], spaceTools: [] }, true, {});
+		const client = new Client({ name: 'hf-fs-wiring-test', version: '1.0.0' });
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+		await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+		try {
+			const result = await client.callTool({
+				name: 'hf_fs',
+				arguments: { cmd: 'attach', args: ['hf://models/org/repo/image.png'] },
+			});
+			expect(result).toMatchObject({
+				isError: true,
+				_meta: {
+					'huggingface.co/hf_fs_error': {
+						code: 'HF_FS_ATTACHMENT_INTEGRITY',
+						retryable: false,
+						suggestedOperation: 'stat',
+					},
+				},
+			});
+			expect(result.structuredContent).toBeUndefined();
+			expect(cancel).toHaveBeenCalledOnce();
+		} finally {
+			await client.close();
+			await server.close();
+		}
+	});
+
+	it('rejects attach on the generic no-image header before stat and download', async () => {
+		const apiClient = new McpApiClient({ type: 'static' }, transportInfo);
+		const { server } = await createServerFactory(apiClient)(
+			{ 'x-mcp-no-image-content': ' true ' },
+			{ builtInTools: [], spaceTools: [] },
+			true,
+			{}
+		);
+		const client = new Client({ name: 'hf-fs-wiring-test', version: '1.0.0' });
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+		await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+		try {
+			const result = await client.callTool({
+				name: 'hf_fs',
+				arguments: { cmd: 'attach', args: ['hf://models/org/repo/image.png'] },
+			});
+			expect(result).toMatchObject({
+				isError: true,
+				_meta: {
+					'huggingface.co/hf_fs_error': {
+						code: 'HF_FS_IMAGE_CONTENT_DISABLED',
+						retryable: false,
+						suggestedOperation: 'stat',
+					},
+				},
+			});
+			expect(pathsInfo).not.toHaveBeenCalled();
+			expect(downloadFile).not.toHaveBeenCalled();
+		} finally {
+			await client.close();
+			await server.close();
+		}
+	});
+});

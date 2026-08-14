@@ -1,5 +1,6 @@
 import { McpServer, type CallToolResult } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import { Buffer } from 'node:buffer';
 import { performance } from 'node:perf_hooks';
 import {
 	RepoSearchTool,
@@ -13,8 +14,17 @@ import {
 	type HubInspectParams,
 	HF_FS_TOOL_CONFIG,
 	HF_FS_TOOL_ID,
+	HF_FS_ATTACH_MAX_BYTES,
 	HfFsTool,
+	HfFsAttachmentIntegrityError,
+	HfFsImageContentDisabledError,
+	classifyHfFsError,
 	formatHfFsMarkdown,
+	formatHfFsRecoveryError,
+	isHfFsAttachExecutionResult,
+	type HfFsAttachResult,
+	type HfFsExecutionResult,
+	type HfFsResult,
 	type HfFsRequest,
 	HfFsWriteTool,
 	formatHfFsWriteMarkdown,
@@ -59,6 +69,42 @@ import { AUTHENTICATION_UNVERIFIED_GUIDANCE, createHfWhoamiOutput, formatHfWhoam
 import { fetchHfWhoami } from './utils/hf-whoami-client.js';
 import { hfWhoamiOutputSchema } from './output-schemas/hf-whoami-output-schema.js';
 import { MCP_SERVER_NAME } from './server-card.js';
+
+const MAX_HF_FS_ATTACHMENT_BASE64_BYTES = 4 * Math.ceil(HF_FS_ATTACH_MAX_BYTES / 3);
+
+function encodeHfFsAttachment(data: Uint8Array, expectedBytes: number): string {
+	if (
+		!Number.isSafeInteger(expectedBytes) ||
+		expectedBytes < 0 ||
+		expectedBytes > HF_FS_ATTACH_MAX_BYTES ||
+		data.byteLength !== expectedBytes
+	) {
+		throw new HfFsAttachmentIntegrityError('hf_fs attachment bytes did not match validated attachment metadata.');
+	}
+	const encodedLength = 4 * Math.ceil(data.byteLength / 3);
+	if (!Number.isSafeInteger(encodedLength) || encodedLength > MAX_HF_FS_ATTACHMENT_BASE64_BYTES) {
+		throw new HfFsAttachmentIntegrityError('hf_fs attachment exceeds the safe base64 response limit.');
+	}
+	const encoded = Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString('base64');
+	if (encoded.length !== encodedLength) {
+		throw new HfFsAttachmentIntegrityError(
+			'hf_fs attachment base64 length did not match the deterministic encoded length.'
+		);
+	}
+	return encoded;
+}
+
+type PreparedHfFsExecution = { metadata: HfFsAttachResult; imageData: string } | { metadata: HfFsResult };
+
+function prepareHfFsExecution(executionResult: HfFsExecutionResult): PreparedHfFsExecution {
+	if (isHfFsAttachExecutionResult(executionResult)) {
+		return {
+			metadata: executionResult.metadata,
+			imageData: encodeHfFsAttachment(executionResult.data, executionResult.metadata.bytes),
+		};
+	}
+	return { metadata: executionResult };
+}
 
 // Bouquet configurations moved to tool-selection-strategy.ts
 
@@ -430,36 +476,79 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 					outputSchema: hfFsToolConfig.outputSchema,
 					annotations: hfFsToolConfig.annotations,
 				},
-				async (request: HfFsRequest) => {
-					const result = await runWithQueryLogging(
-						logToolQuery,
-						{
-							methodName: hfFsToolConfig.name,
-							query: [request.cmd, ...request.args].join(' '),
-							parameters: {
-								cmd: request.cmd,
-								args: request.args,
+				async (request: HfFsRequest, ctx) => {
+					try {
+						const prepared = await runWithQueryLogging(
+							logToolQuery,
+							{
+								methodName: hfFsToolConfig.name,
+								query: [request.cmd, ...request.args].join(' '),
+								parameters: {
+									cmd: request.cmd,
+									args: request.args,
+								},
+								baseOptions: getLoggingOptions(),
+								successOptions: ({ metadata: fsResult }) => {
+									const shared =
+										'entries' in fsResult
+											? fsResult.entries.length
+											: fsResult.op === 'stat' && !fsResult.exists
+												? 0
+												: 1;
+									return {
+										totalResults: 'entries' in fsResult ? fsResult.entries.length : shared,
+										resultsShared: shared,
+										responseCharCount: formatHfFsMarkdown(fsResult).length,
+									};
+								},
 							},
-							baseOptions: getLoggingOptions(),
-							successOptions: (fsResult) => {
-								const shared =
-									'entries' in fsResult ? fsResult.entries.length : fsResult.op === 'stat' && !fsResult.exists ? 0 : 1;
-								return {
-									totalResults: 'entries' in fsResult ? fsResult.entries.length : shared,
-									resultsShared: shared,
-									responseCharCount: formatHfFsMarkdown(fsResult).length,
-								};
-							},
-						},
-						async () => {
-							const tool = new HfFsTool(hfToken, undefined);
-							return await tool.run(request);
+							async () => {
+								if (request.cmd === 'attach' && noImageContentHeaderEnabled) {
+									throw new HfFsImageContentDisabledError();
+								}
+								const tool = new HfFsTool(hfToken, undefined, ctx.mcpReq.signal);
+								const executionResult = await tool.run(request);
+								// Encode before success telemetry is emitted. Only metadata-derived metrics reach
+								// logToolQuery; neither the Uint8Array nor its base64 representation is logged.
+								return prepareHfFsExecution(executionResult);
+							}
+						);
+						const metadata = prepared.metadata;
+						const textContent = { type: 'text' as const, text: formatHfFsMarkdown(metadata) };
+						if ('imageData' in prepared) {
+							return {
+								structuredContent: { ...metadata },
+								content: [
+									textContent,
+									{
+										type: 'image' as const,
+										data: prepared.imageData,
+										mimeType: prepared.metadata.mime_type,
+									},
+								],
+							};
 						}
-					);
-					return {
-						structuredContent: { ...result },
-						content: [{ type: 'text', text: formatHfFsMarkdown(result) }],
-					};
+						return {
+							structuredContent: { ...metadata },
+							content: [textContent],
+						};
+					} catch (error) {
+						const recoveryError = classifyHfFsError(error);
+						if (!recoveryError) {
+							throw error;
+						}
+						return {
+							isError: true,
+							content: [{ type: 'text' as const, text: formatHfFsRecoveryError(recoveryError) }],
+							_meta: {
+								'huggingface.co/hf_fs_error': {
+									code: recoveryError.code,
+									retryable: recoveryError.retryable,
+									...(recoveryError.suggestedOperation ? { suggestedOperation: recoveryError.suggestedOperation } : {}),
+								},
+							},
+						};
+					}
 				}
 			);
 		}
@@ -516,6 +605,7 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 					title: HF_JOBS_TOOL_CONFIG.title,
 					description: HF_JOBS_TOOL_CONFIG.description,
 					inputSchema: HF_JOBS_TOOL_CONFIG.schema,
+					outputSchema: HF_JOBS_TOOL_CONFIG.outputSchema,
 					annotations: HF_JOBS_TOOL_CONFIG.annotations,
 				},
 				async (params: z.infer<typeof HF_JOBS_TOOL_CONFIG.schema>, ctx) => {
@@ -542,6 +632,7 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 					);
 
 					return {
+						structuredContent: result.structuredContent,
 						content: [{ type: 'text', text: result.formatted }],
 						...(result.isError && { isError: true }),
 					};

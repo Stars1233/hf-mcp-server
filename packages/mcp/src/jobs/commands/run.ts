@@ -4,6 +4,7 @@ import { createJobSpec } from './utils.js';
 import { fetchJobLogs, DEFAULT_LOG_WAIT_MS, DEFAULT_MAX_LOG_LINES, DEFAULT_LOG_WAIT_SECONDS } from '../sse-handler.js';
 import { resolveUvCommand, UV_DEFAULT_IMAGE } from './uv-utils.js';
 import { notifyJobsProgress, type JobsProgressCallback } from '../progress.js';
+import { collectSensitiveValues, redactSensitiveText, toHfJobOutput, type JobsCommandResult } from '../jobs-output.js';
 
 /**
  * Execute the 'run' command
@@ -14,7 +15,7 @@ export async function runCommand(
 	client: JobsApiClient,
 	token?: string,
 	onProgress?: JobsProgressCallback
-): Promise<string> {
+): Promise<JobsCommandResult> {
 	await notifyJobsProgress(onProgress, { progress: 0, message: 'Submitting job.' });
 
 	// Create job spec from args
@@ -34,33 +35,57 @@ export async function runCommand(
 	await notifyJobsProgress(onProgress, { message: `Job ${job.id} submitted with status ${job.status.stage}.` });
 
 	const jobUrl = `https://huggingface.co/jobs/${job.owner.name}/${job.id}`;
+	const sensitiveValues = collectSensitiveValues(jobSpec, [token]);
+	const jobOutput = toHfJobOutput(job, jobUrl, sensitiveValues);
 
 	// If detached, return immediately
 	if (args.detach) {
-		return `Job started successfully!
+		return {
+			formatted: `Job started successfully!
 
 **Job ID:** ${job.id}
 **Status:** ${job.status.stage}
 **View at:** ${jobUrl}
 
 	To check logs, call this tool with \`{"operation": "logs", "args": {"job_id": "${job.id}"}}\`
-	To inspect, call this tool with \`{"operation": "inspect", "args": {"job_id": "${job.id}"}}\``;
+	To inspect, call this tool with \`{"operation": "inspect", "args": {"job_id": "${job.id}"}}\``,
+			outcome: { kind: 'job', job: jobOutput },
+			totalResults: 1,
+			resultsShared: 1,
+		};
 	}
 
 	// Not detached - fetch logs
 	const logsUrl = client.getLogsUrl(job.id, job.owner.name);
-	const logResult = await fetchJobLogs(logsUrl, {
-		token,
-		maxDuration: DEFAULT_LOG_WAIT_MS,
-		maxLines: DEFAULT_MAX_LOG_LINES,
-		onProgress,
-	});
+	let logResult;
+	try {
+		logResult = await fetchJobLogs(logsUrl, {
+			token,
+			maxDuration: DEFAULT_LOG_WAIT_MS,
+			maxLines: DEFAULT_MAX_LOG_LINES,
+			onProgress,
+		});
+	} catch (error) {
+		const logsError = error instanceof Error ? error.message : String(error);
+		return {
+			formatted:
+				`Job started: ${job.id}\n\n` + `Could not collect logs: ${logsError}\n\n` + `View job details: ${jobUrl}`,
+			outcome: {
+				kind: 'job',
+				job: jobOutput,
+				logs_error: logsError,
+			},
+			totalResults: 1,
+			resultsShared: 1,
+		};
+	}
 
+	const redactedLogs = logResult.logs.map((line) => redactSensitiveText(line, sensitiveValues));
 	let response = `Job started: ${job.id}\n\n`;
 
-	if (logResult.logs.length > 0) {
+	if (redactedLogs.length > 0) {
 		response += `**Logs (last ${DEFAULT_MAX_LOG_LINES} lines):**\n\`\`\`\n`;
-		response += logResult.logs.join('\n');
+		response += redactedLogs.join('\n');
 		response += '\n```\n\n';
 	}
 
@@ -74,7 +99,18 @@ export async function runCommand(
 		response += `View full logs: ${jobUrl}`;
 	}
 
-	return response;
+	return {
+		formatted: response,
+		outcome: {
+			kind: 'job',
+			job: jobOutput,
+			logs: redactedLogs,
+			logs_finished: logResult.finished,
+			logs_truncated: logResult.truncated,
+		},
+		totalResults: 1,
+		resultsShared: 1,
+	};
 }
 
 /**
@@ -86,7 +122,7 @@ export async function uvCommand(
 	client: JobsApiClient,
 	token?: string,
 	onProgress?: JobsProgressCallback
-): Promise<string> {
+): Promise<JobsCommandResult> {
 	// UV jobs use a standard UV image unless overridden
 	const image = UV_DEFAULT_IMAGE;
 

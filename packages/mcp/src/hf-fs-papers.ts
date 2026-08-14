@@ -246,6 +246,8 @@ export class HfFsPaperProvider {
 				return await this.ls(params);
 			case 'cat':
 				return await this.cat(params);
+			case 'attach':
+				throw new Error('attach requires a direct repository or bucket file URI.');
 			case 'stat':
 				return await this.stat(params);
 			case 'find':
