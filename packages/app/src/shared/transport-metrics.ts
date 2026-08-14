@@ -3,6 +3,23 @@ import type { TransportType } from './constants.js';
 
 export type ProtocolEra = 'legacy' | 'modern';
 export type SubscriptionMethod = 'resources/subscribe' | 'resources/unsubscribe' | 'subscriptions/listen';
+export type ServerDiscoverOutcome =
+	| 'success'
+	| 'headerBodyMismatch'
+	| 'unsupportedVersion'
+	| 'invalidRequest'
+	| 'authRejected'
+	| 'internalServerError'
+	| 'otherError';
+export const SERVER_DISCOVER_OUTCOMES = [
+	'success',
+	'headerBodyMismatch',
+	'unsupportedVersion',
+	'invalidRequest',
+	'authRejected',
+	'internalServerError',
+	'otherError',
+] as const satisfies readonly ServerDiscoverOutcome[];
 
 export interface SubscriptionAttempt {
 	method: SubscriptionMethod;
@@ -14,6 +31,13 @@ export interface SubscriptionAttempt {
 }
 
 interface SubscriptionAttemptMetrics extends SubscriptionAttempt {
+	count: number;
+	firstSeen: Date;
+	lastSeen: Date;
+}
+
+interface ServerDiscoverOutcomeMetrics {
+	outcome: ServerDiscoverOutcome;
 	count: number;
 	firstSeen: Date;
 	lastSeen: Date;
@@ -96,6 +120,9 @@ export interface TransportMetrics {
 	// Legacy resource-subscription and modern subscription-stream attempts.
 	// Request shapes are sanitized before reaching this metrics layer.
 	subscriptionAttempts: Map<string, SubscriptionAttemptMetrics>;
+
+	// Low-cardinality outcomes for modern server/discover negotiation probes.
+	serverDiscoverOutcomes?: Map<ServerDiscoverOutcome, ServerDiscoverOutcomeMetrics>;
 
 	// Static page hits (for stateless transport)
 	staticPageHits200?: number;
@@ -329,6 +356,13 @@ export interface TransportMetricsResponse {
 		lastSeen: string;
 	}>;
 
+	serverDiscoverOutcomes?: Array<{
+		outcome: ServerDiscoverOutcome;
+		count: number;
+		firstSeen: string;
+		lastSeen: string;
+	}>;
+
 	// API call metrics (only shown in external API mode)
 	apiMetrics?: ApiCallMetrics;
 
@@ -409,6 +443,16 @@ export function formatMetricsForAPI(
 				lastSeen: attempt.lastSeen.toISOString(),
 			}))
 			.sort((a, b) => b.count - a.count),
+		serverDiscoverOutcomes: Array.from(metrics.serverDiscoverOutcomes?.values() ?? [])
+			.map((outcome) => ({
+				...outcome,
+				firstSeen: outcome.firstSeen.toISOString(),
+				lastSeen: outcome.lastSeen.toISOString(),
+			}))
+			.sort(
+				(left, right) =>
+					SERVER_DISCOVER_OUTCOMES.indexOf(left.outcome) - SERVER_DISCOVER_OUTCOMES.indexOf(right.outcome)
+			),
 	};
 }
 
@@ -456,6 +500,7 @@ function createEmptyMetrics(): TransportMetrics {
 		clients: new Map(),
 		methods: new Map(),
 		subscriptionAttempts: new Map(),
+		serverDiscoverOutcomes: new Map(),
 		staticPageHits200: 0,
 		staticPageHits405: 0,
 	};
@@ -972,6 +1017,28 @@ export class MetricsCounter {
 				methodMetrics.averageResponseTime = totalTime / successfulCalls;
 			}
 		}
+	}
+
+	/**
+	 * Track one modern server/discover negotiation outcome. The outcome is a
+	 * fixed enum so this aggregate cannot retain caller-controlled values.
+	 */
+	trackServerDiscoverOutcome(outcome: ServerDiscoverOutcome): void {
+		const outcomes = this.metrics.serverDiscoverOutcomes ?? new Map();
+		this.metrics.serverDiscoverOutcomes = outcomes;
+		const existing = outcomes.get(outcome);
+		if (existing) {
+			existing.count++;
+			existing.lastSeen = new Date();
+			return;
+		}
+
+		outcomes.set(outcome, {
+			outcome,
+			count: 1,
+			firstSeen: new Date(),
+			lastSeen: new Date(),
+		});
 	}
 
 	/**

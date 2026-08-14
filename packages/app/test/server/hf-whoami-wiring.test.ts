@@ -70,6 +70,13 @@ describe('hf_whoami MCP wiring', () => {
 				description:
 					'Inspect the current Hugging Face authentication context, including the account, visible organization memberships, and credential access details. Read-only and never returns credential values.',
 			});
+			expect(advertised?.annotations).toEqual({
+				title: 'Hugging Face User Info',
+				destructiveHint: false,
+				idempotentHint: false,
+				readOnlyHint: true,
+				openWorldHint: false,
+			});
 			expect(advertised?.outputSchema).toMatchObject({
 				type: 'object',
 				oneOf: [

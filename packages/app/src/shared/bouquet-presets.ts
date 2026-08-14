@@ -10,7 +10,7 @@ import {
 	HF_FILES_FLAG,
 } from '@llmindset/hf-mcp';
 import type { AppSettings } from './settings.js';
-import { README_INCLUDE_FLAG, GRADIO_IMAGE_FILTER_FLAG } from './behavior-flags.js';
+import { GRADIO_IMAGE_FILTER_FLAG } from './behavior-flags.js';
 
 export const BOUQUETS: Record<string, AppSettings> = {
 	hf_api: {
@@ -34,7 +34,7 @@ export const BOUQUETS: Record<string, AppSettings> = {
 		spaceTools: [],
 	},
 	skills: {
-		builtInTools: [HUB_REPO_DETAILS_TOOL_ID, README_INCLUDE_FLAG, REPO_SEARCH_TOOL_ID, HF_FS_TOOL_ID, HF_JOBS_TOOL_ID],
+		builtInTools: [HUB_REPO_DETAILS_TOOL_ID, REPO_SEARCH_TOOL_ID, HF_FS_TOOL_ID, HF_JOBS_TOOL_ID],
 		spaceTools: [],
 	},
 	research: {
@@ -43,11 +43,6 @@ export const BOUQUETS: Record<string, AppSettings> = {
 	},
 	all: {
 		builtInTools: [...ALL_BUILTIN_TOOL_IDS],
-		spaceTools: [],
-	},
-	// Test bouquets for README inclusion behavior
-	hub_repo_details_readme: {
-		builtInTools: [HUB_REPO_DETAILS_TOOL_ID, README_INCLUDE_FLAG],
 		spaceTools: [],
 	},
 	hub_repo_details: {

@@ -120,6 +120,38 @@ describe('parseHfFsRequest', () => {
 		});
 	});
 
+	it('parses attach with exactly one complete URI and an optional lowering limit', () => {
+		expect(
+			parseHfFsRequest({
+				cmd: 'attach',
+				args: ['hf://datasets/org/repo/images/example.PNG', '--max-bytes', '1024'],
+			}).params
+		).toEqual({
+			op: 'attach',
+			uri: 'hf://datasets/org/repo/images/example.PNG',
+			max_bytes: 1024,
+		});
+
+		expect(() =>
+			parseHfFsRequest({
+				cmd: 'attach',
+				args: ['hf://datasets/org/repo', 'images/example.png'],
+			})
+		).toThrow('unexpected argument for attach');
+		expect(() =>
+			parseHfFsRequest({
+				cmd: 'attach',
+				args: ['hf://datasets/org/repo/images/example.png', '--offset', '1'],
+			})
+		).toThrow('unexpected argument for attach');
+		expect(() =>
+			parseHfFsRequest({
+				cmd: 'attach',
+				args: ['hf://datasets/org/repo/images/example.png', '-max-bytes', '1'],
+			})
+		).toThrow('unexpected argument for attach');
+	});
+
 	it('allows queryless repository discovery but still requires docs and paper queries', () => {
 		expect(
 			parseHfFsRequest({
@@ -307,6 +339,8 @@ describe('parseHfFsRequest', () => {
 		[{ cmd: 'search', args: ['hf://models', 'query', '--limit', '1001'] }, 'limit must be between 1 and 1000'],
 		[{ cmd: 'ls', args: ['hf://models/trending', '--limit', '21'] }, 'limit must be between 1 and 20'],
 		[{ cmd: 'cat', args: ['hf://models/org/repo/README.md', '--max-bytes', '80001'] }, 'max_bytes'],
+		[{ cmd: 'attach', args: ['hf://models/org/repo/image.png', '--max-bytes', '0'] }, 'attach max_bytes'],
+		[{ cmd: 'attach', args: ['hf://models/org/repo/image.png', '--max-bytes', '4194305'] }, 'attach max_bytes'],
 	] as const)('rejects invalid argv: %o', (request, message) => {
 		expect(() => parseHfFsRequest({ cmd: request.cmd, args: [...request.args] })).toThrow(message);
 	});

@@ -1,5 +1,6 @@
 import { McpServer, type CallToolResult } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import { Buffer } from 'node:buffer';
 import { performance } from 'node:perf_hooks';
 import {
 	RepoSearchTool,
@@ -13,8 +14,17 @@ import {
 	type HubInspectParams,
 	HF_FS_TOOL_CONFIG,
 	HF_FS_TOOL_ID,
+	HF_FS_ATTACH_MAX_BYTES,
 	HfFsTool,
+	HfFsAttachmentIntegrityError,
+	HfFsImageContentDisabledError,
+	classifyHfFsError,
 	formatHfFsMarkdown,
+	formatHfFsRecoveryError,
+	isHfFsAttachExecutionResult,
+	type HfFsAttachResult,
+	type HfFsExecutionResult,
+	type HfFsResult,
 	type HfFsRequest,
 	HfFsWriteTool,
 	formatHfFsWriteMarkdown,
@@ -59,6 +69,42 @@ import { AUTHENTICATION_UNVERIFIED_GUIDANCE, createHfWhoamiOutput, formatHfWhoam
 import { fetchHfWhoami } from './utils/hf-whoami-client.js';
 import { hfWhoamiOutputSchema } from './output-schemas/hf-whoami-output-schema.js';
 import { MCP_SERVER_NAME } from './server-card.js';
+
+const MAX_HF_FS_ATTACHMENT_BASE64_BYTES = 4 * Math.ceil(HF_FS_ATTACH_MAX_BYTES / 3);
+
+function encodeHfFsAttachment(data: Uint8Array, expectedBytes: number): string {
+	if (
+		!Number.isSafeInteger(expectedBytes) ||
+		expectedBytes < 0 ||
+		expectedBytes > HF_FS_ATTACH_MAX_BYTES ||
+		data.byteLength !== expectedBytes
+	) {
+		throw new HfFsAttachmentIntegrityError('hf_fs attachment bytes did not match validated attachment metadata.');
+	}
+	const encodedLength = 4 * Math.ceil(data.byteLength / 3);
+	if (!Number.isSafeInteger(encodedLength) || encodedLength > MAX_HF_FS_ATTACHMENT_BASE64_BYTES) {
+		throw new HfFsAttachmentIntegrityError('hf_fs attachment exceeds the safe base64 response limit.');
+	}
+	const encoded = Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString('base64');
+	if (encoded.length !== encodedLength) {
+		throw new HfFsAttachmentIntegrityError(
+			'hf_fs attachment base64 length did not match the deterministic encoded length.'
+		);
+	}
+	return encoded;
+}
+
+type PreparedHfFsExecution = { metadata: HfFsAttachResult; imageData: string } | { metadata: HfFsResult };
+
+function prepareHfFsExecution(executionResult: HfFsExecutionResult): PreparedHfFsExecution {
+	if (isHfFsAttachExecutionResult(executionResult)) {
+		return {
+			metadata: executionResult.metadata,
+			imageData: encodeHfFsAttachment(executionResult.data, executionResult.metadata.bytes),
+		};
+	}
+	return { metadata: executionResult };
+}
 
 // Bouquet configurations moved to tool-selection-strategy.ts
 
@@ -249,7 +295,13 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 					description: whoDescription,
 					inputSchema: z.object({}),
 					outputSchema: hfWhoamiOutputSchema,
-					annotations: { readOnlyHint: true, openWorldHint: false, title: 'Hugging Face User Info' },
+					annotations: {
+						title: 'Hugging Face User Info',
+						destructiveHint: false,
+						idempotentHint: false,
+						readOnlyHint: true,
+						openWorldHint: false,
+					},
 				},
 				() => {
 					const result = createHfWhoamiOutput(userDetails, hfToken, CONFIG_GUIDANCE);
@@ -265,7 +317,7 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 			server.registerTool(
 				REPO_SEARCH_TOOL_CONFIG.name,
 				{
-					title: REPO_SEARCH_TOOL_CONFIG.annotations.title,
+					title: REPO_SEARCH_TOOL_CONFIG.title,
 					description: REPO_SEARCH_TOOL_CONFIG.description,
 					inputSchema: REPO_SEARCH_TOOL_CONFIG.schema,
 					annotations: REPO_SEARCH_TOOL_CONFIG.annotations,
@@ -301,7 +353,7 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 			server.registerTool(
 				createRepoToolConfig.name,
 				{
-					title: createRepoToolConfig.annotations.title,
+					title: createRepoToolConfig.title,
 					description: createRepoToolConfig.description,
 					inputSchema: createRepoToolConfig.schema,
 					outputSchema: createRepoToolConfig.outputSchema,
@@ -333,49 +385,20 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 			);
 		}
 
-		// Compute README availability; adjust description and schema accordingly
-		const hubInspectReadmeAllowed = toolSelection.behaviorFlags.allowReadmeInclude;
-		const hubInspectDescription = hubInspectReadmeAllowed
-			? `${HUB_REPO_DETAILS_TOOL_CONFIG.description} README file may be requested from the external repository.`
-			: HUB_REPO_DETAILS_TOOL_CONFIG.description;
-		const hubInspectBaseShape = HUB_REPO_DETAILS_TOOL_CONFIG.schema.shape as z.ZodRawShape;
-		const hubInspectSchemaShape: z.ZodRawShape = hubInspectReadmeAllowed
-			? hubInspectBaseShape
-			: (() => {
-					const { include_readme: _omit, ...rest } = hubInspectBaseShape as unknown as Record<string, unknown>;
-					return rest as unknown as z.ZodRawShape;
-				})();
-
 		if (shouldRegisterSelectedTool(HUB_REPO_DETAILS_TOOL_CONFIG.name)) {
 			server.registerTool(
 				HUB_REPO_DETAILS_TOOL_CONFIG.name,
 				{
-					description: hubInspectDescription,
-					inputSchema: z.object(hubInspectSchemaShape),
+					title: HUB_REPO_DETAILS_TOOL_CONFIG.title,
+					description: HUB_REPO_DETAILS_TOOL_CONFIG.description,
+					inputSchema: HUB_REPO_DETAILS_TOOL_CONFIG.schema,
 					annotations: HUB_REPO_DETAILS_TOOL_CONFIG.annotations,
 				},
-				async (params: Record<string, unknown>) => {
-					const wantReadme = (params as { include_readme?: boolean }).include_readme === true; // explicit opt-in required
-					const includeReadme = hubInspectReadmeAllowed && wantReadme;
-
+				async (params: HubInspectParams) => {
 					// Prepare safe logging parameters without relying on strong typing
-					const repoIdsParam = (params as { repo_ids?: unknown }).repo_ids;
-					const repoIds = Array.isArray(repoIdsParam)
-						? repoIdsParam.filter((repoId): repoId is string => typeof repoId === 'string')
-						: [];
+					const repoIds = params.repo_ids;
 					const joinedRepoIds = repoIds.join(', ');
 					const loggedRepoIds = joinedRepoIds.length > 500 ? `${joinedRepoIds.slice(0, 497)}...` : joinedRepoIds;
-					const repoType = (params as { repo_type?: unknown }).repo_type as unknown;
-					const repoTypeSafe =
-						repoType === 'model' || repoType === 'dataset' || repoType === 'space' ? repoType : undefined;
-					const operationsParam = (params as { operations?: unknown }).operations;
-					const operations = Array.isArray(operationsParam)
-						? operationsParam.filter((operation): operation is string => typeof operation === 'string')
-						: undefined;
-					const config = (params as { config?: unknown }).config;
-					const split = (params as { split?: unknown }).split;
-					const offset = (params as { offset?: unknown }).offset;
-					const limit = (params as { limit?: unknown }).limit;
 
 					const result = await runWithQueryLogging(
 						logToolQuery,
@@ -385,13 +408,12 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 							parameters: {
 								repo_ids: repoIds,
 								count: repoIds.length,
-								repo_type: repoTypeSafe,
-								include_readme: includeReadme,
-								operations,
-								config: typeof config === 'string' ? config : undefined,
-								split: typeof split === 'string' ? split : undefined,
-								offset: typeof offset === 'number' ? offset : undefined,
-								limit: typeof limit === 'number' ? limit : undefined,
+								repo_type: params.repo_type,
+								operations: params.operations,
+								config: params.config,
+								split: params.split,
+								offset: params.offset,
+								limit: params.limit,
 							},
 							baseOptions: getLoggingOptions(),
 							successOptions: (details) => ({
@@ -402,7 +424,7 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 						},
 						async () => {
 							const tool = new HubInspectTool(hfToken, undefined);
-							return tool.inspect(params as unknown as HubInspectParams, includeReadme);
+							return tool.inspect(params);
 						}
 					);
 					return {
@@ -423,36 +445,79 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 					outputSchema: hfFsToolConfig.outputSchema,
 					annotations: hfFsToolConfig.annotations,
 				},
-				async (request: HfFsRequest) => {
-					const result = await runWithQueryLogging(
-						logToolQuery,
-						{
-							methodName: hfFsToolConfig.name,
-							query: [request.cmd, ...request.args].join(' '),
-							parameters: {
-								cmd: request.cmd,
-								args: request.args,
+				async (request: HfFsRequest, ctx) => {
+					try {
+						const prepared = await runWithQueryLogging(
+							logToolQuery,
+							{
+								methodName: hfFsToolConfig.name,
+								query: [request.cmd, ...request.args].join(' '),
+								parameters: {
+									cmd: request.cmd,
+									args: request.args,
+								},
+								baseOptions: getLoggingOptions(),
+								successOptions: ({ metadata: fsResult }) => {
+									const shared =
+										'entries' in fsResult
+											? fsResult.entries.length
+											: fsResult.op === 'stat' && !fsResult.exists
+												? 0
+												: 1;
+									return {
+										totalResults: 'entries' in fsResult ? fsResult.entries.length : shared,
+										resultsShared: shared,
+										responseCharCount: formatHfFsMarkdown(fsResult).length,
+									};
+								},
 							},
-							baseOptions: getLoggingOptions(),
-							successOptions: (fsResult) => {
-								const shared =
-									'entries' in fsResult ? fsResult.entries.length : fsResult.op === 'stat' && !fsResult.exists ? 0 : 1;
-								return {
-									totalResults: 'entries' in fsResult ? fsResult.entries.length : shared,
-									resultsShared: shared,
-									responseCharCount: formatHfFsMarkdown(fsResult).length,
-								};
-							},
-						},
-						async () => {
-							const tool = new HfFsTool(hfToken, undefined);
-							return await tool.run(request);
+							async () => {
+								if (request.cmd === 'attach' && noImageContentHeaderEnabled) {
+									throw new HfFsImageContentDisabledError();
+								}
+								const tool = new HfFsTool(hfToken, undefined, ctx.mcpReq.signal);
+								const executionResult = await tool.run(request);
+								// Encode before success telemetry is emitted. Only metadata-derived metrics reach
+								// logToolQuery; neither the Uint8Array nor its base64 representation is logged.
+								return prepareHfFsExecution(executionResult);
+							}
+						);
+						const metadata = prepared.metadata;
+						const textContent = { type: 'text' as const, text: formatHfFsMarkdown(metadata) };
+						if ('imageData' in prepared) {
+							return {
+								structuredContent: { ...metadata },
+								content: [
+									textContent,
+									{
+										type: 'image' as const,
+										data: prepared.imageData,
+										mimeType: prepared.metadata.mime_type,
+									},
+								],
+							};
 						}
-					);
-					return {
-						structuredContent: { ...result },
-						content: [{ type: 'text', text: formatHfFsMarkdown(result) }],
-					};
+						return {
+							structuredContent: { ...metadata },
+							content: [textContent],
+						};
+					} catch (error) {
+						const recoveryError = classifyHfFsError(error);
+						if (!recoveryError) {
+							throw error;
+						}
+						return {
+							isError: true,
+							content: [{ type: 'text' as const, text: formatHfFsRecoveryError(recoveryError) }],
+							_meta: {
+								'huggingface.co/hf_fs_error': {
+									code: recoveryError.code,
+									retryable: recoveryError.retryable,
+									...(recoveryError.suggestedOperation ? { suggestedOperation: recoveryError.suggestedOperation } : {}),
+								},
+							},
+						};
+					}
 				}
 			);
 		}
@@ -506,9 +571,10 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 			server.registerTool(
 				HF_JOBS_TOOL_CONFIG.name,
 				{
-					title: HF_JOBS_TOOL_CONFIG.annotations.title,
+					title: HF_JOBS_TOOL_CONFIG.title,
 					description: HF_JOBS_TOOL_CONFIG.description,
 					inputSchema: HF_JOBS_TOOL_CONFIG.schema,
+					outputSchema: HF_JOBS_TOOL_CONFIG.outputSchema,
 					annotations: HF_JOBS_TOOL_CONFIG.annotations,
 				},
 				async (params: z.infer<typeof HF_JOBS_TOOL_CONFIG.schema>, ctx) => {
@@ -535,6 +601,7 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 					);
 
 					return {
+						structuredContent: result.structuredContent,
 						content: [{ type: 'text', text: result.formatted }],
 						...(result.isError && { isError: true }),
 					};
@@ -686,7 +753,7 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 			server.registerTool(
 				dynamicSpaceToolConfig.name,
 				{
-					title: dynamicSpaceToolConfig.annotations.title,
+					title: dynamicSpaceToolConfig.title,
 					description: dynamicSpaceToolConfig.description,
 					inputSchema: dynamicSpaceToolConfig.schema,
 					annotations: dynamicSpaceToolConfig.annotations,

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 import {
 	downloadFile,
 	datasetInfo,
@@ -11,7 +12,16 @@ import {
 	pathsInfo,
 	spaceInfo,
 } from '@huggingface/hub';
-import { HF_FS_MAX_OUTPUT_CHARS, HF_FS_TOOL_CONFIG, HfFsTool, formatHfFsMarkdown, parseHfFsUri } from './hf-fs.js';
+import {
+	HF_FS_ATTACH_MAX_BYTES,
+	HF_FS_MAX_OUTPUT_CHARS,
+	HF_FS_TOOL_CONFIG,
+	HfFsTool,
+	formatHfFsMarkdown,
+	isHfFsAttachExecutionResult,
+	parseHfFsUri,
+} from './hf-fs.js';
+import { classifyHfFsError } from './hf-fs-errors.js';
 
 vi.mock('@huggingface/hub', () => ({
 	HubApiError: class HubApiError extends Error {
@@ -42,6 +52,32 @@ async function* entries<T>(items: T[]): AsyncGenerator<T> {
 	}
 }
 
+function createStreamingBlob(
+	size: number,
+	chunks: Uint8Array[],
+	cancel?: (reason?: unknown) => void,
+	close = true
+): Blob {
+	return {
+		size,
+		stream: () =>
+			new ReadableStream<Uint8Array>({
+				start(controller) {
+					for (const chunk of chunks) {
+						controller.enqueue(chunk);
+					}
+					if (close) {
+						controller.close();
+					}
+				},
+				cancel,
+			}),
+		arrayBuffer: () => {
+			throw new Error('arrayBuffer must not be used for attachments');
+		},
+	} as unknown as Blob;
+}
+
 describe('HfFsTool config', () => {
 	it('exposes the argv schema and command grammar', () => {
 		expect(Object.keys(HF_FS_TOOL_CONFIG.schema.shape)).toEqual(['cmd', 'args']);
@@ -50,6 +86,48 @@ describe('HfFsTool config', () => {
 		expect(HF_FS_TOOL_CONFIG.description).toContain('ls hf://papers/trending');
 		expect(HF_FS_TOOL_CONFIG.description).toContain('ls hf://docs for products');
 		expect(HF_FS_TOOL_CONFIG.description).toContain('hf://README.md');
+		expect(HF_FS_TOOL_CONFIG.description).toContain('Cat reads confirmed UTF-8 text files only');
+		expect(HF_FS_TOOL_CONFIG.description).toContain('reuse the returned URI, or the Target URI for links, verbatim');
+		expect(HF_FS_TOOL_CONFIG.description).toContain('Use search—not an unscoped find—for global');
+		expect(HF_FS_TOOL_CONFIG.description).toContain('never with repository file listings or documentation');
+		expect(HF_FS_TOOL_CONFIG.description).toContain('attach URI [--max-bytes N]');
+	});
+
+	it('validates attachment metadata without accepting a binary payload field', () => {
+		const metadata = {
+			op: 'attach' as const,
+			uri: 'hf://models/org/repo/image.png',
+			path: 'image.png',
+			mime_type: 'image/png' as const,
+			bytes: 3,
+		};
+		expect(HF_FS_TOOL_CONFIG.outputSchema.parse(metadata)).toEqual(metadata);
+		expect(() => HF_FS_TOOL_CONFIG.outputSchema.parse({ ...metadata, data: Uint8Array.from([1, 2, 3]) })).toThrow();
+		expect(() => HF_FS_TOOL_CONFIG.outputSchema.parse({ ...metadata, base64: 'AQID' })).toThrow();
+		expect(() => HF_FS_TOOL_CONFIG.outputSchema.parse({ ...metadata, bytes: Uint8Array.from([1, 2, 3]) })).toThrow();
+		for (const field of ['path', 'mime_type', 'bytes'] as const) {
+			const missing: Partial<typeof metadata> = { ...metadata };
+			delete missing[field];
+			expect(() => HF_FS_TOOL_CONFIG.outputSchema.parse(missing)).toThrow();
+		}
+		expect(() => HF_FS_TOOL_CONFIG.outputSchema.parse({ ...metadata, bytes: HF_FS_ATTACH_MAX_BYTES + 1 })).toThrow();
+
+		const jsonSchema = z.toJSONSchema(HF_FS_TOOL_CONFIG.outputSchema);
+		expect(jsonSchema.additionalProperties).toBe(false);
+		expect(jsonSchema.allOf).toContainEqual({
+			if: {
+				properties: { op: { const: 'attach' } },
+				required: ['op'],
+			},
+			then: {
+				properties: {
+					path: { type: 'string' },
+					mime_type: { type: 'string', enum: ['image/jpeg', 'image/png', 'image/webp'] },
+					bytes: { type: 'integer', minimum: 0, maximum: HF_FS_ATTACH_MAX_BYTES },
+				},
+				required: ['path', 'mime_type', 'bytes'],
+			},
+		});
 	});
 });
 
@@ -933,6 +1011,24 @@ describe('HfFsTool', () => {
 		});
 	});
 
+	it.each(['hf://models', 'hf://datasets', 'hf://spaces'])(
+		'stats the virtual discovery root %s without probing the Hub',
+		async (uri) => {
+			await expect(new HfFsTool('token').run({ op: 'stat', uri })).resolves.toEqual({
+				uri,
+				op: 'stat',
+				exists: true,
+				type: 'dir',
+				path: '',
+			});
+			expect(modelInfo).not.toHaveBeenCalled();
+			expect(datasetInfo).not.toHaveBeenCalled();
+			expect(spaceInfo).not.toHaveBeenCalled();
+			expect(pathsInfo).not.toHaveBeenCalled();
+			expect(fetch).not.toHaveBeenCalled();
+		}
+	);
+
 	it('probes repo roots before reporting them as existing', async () => {
 		vi.mocked(modelInfo).mockResolvedValueOnce(undefined as unknown as Awaited<ReturnType<typeof modelInfo>>);
 
@@ -1171,5 +1267,324 @@ describe('HfFsTool', () => {
 		expect(result.truncation_reason).toBe('max_bytes');
 		expect(result.bytes).toBe(80_000);
 		expect(result.next_offset).toBe(80_050);
+	});
+
+	it.each([
+		['photo.jpg', 'image/jpeg'],
+		['photo.JPEG', 'image/jpeg'],
+		['photo.PNG', 'image/png'],
+		['photo.WeBp', 'image/webp'],
+	] as const)('classifies attach extension %s as %s without inspecting bytes', async (filePath, mimeType) => {
+		const opaqueBytes = Uint8Array.from([0, 255, 1, 2, 3]);
+		vi.mocked(pathsInfo).mockResolvedValueOnce([{ path: filePath, type: 'file', size: opaqueBytes.byteLength }]);
+		vi.mocked(downloadFile).mockResolvedValueOnce(new Blob([opaqueBytes]));
+
+		const result = await new HfFsTool('token').run({
+			op: 'attach',
+			uri: `hf://models/org/repo/${filePath}`,
+		});
+
+		expect(isHfFsAttachExecutionResult(result)).toBe(true);
+		if (!isHfFsAttachExecutionResult(result)) {
+			throw new Error('Expected attach execution result');
+		}
+		expect(result.metadata).toEqual({
+			op: 'attach',
+			uri: `hf://models/org/repo/${filePath}`,
+			path: filePath,
+			mime_type: mimeType,
+			bytes: opaqueBytes.byteLength,
+		});
+		expect(result.data).toEqual(opaqueBytes);
+		expect(result.data).toBeInstanceOf(Uint8Array);
+		expect(Object.keys(result)).toEqual(['metadata', 'data']);
+	});
+
+	it.each([
+		[
+			'hf://models/org/repo@refs/pr/3/images/cat.png',
+			{ type: 'model', name: 'org/repo' },
+			'images/cat.png',
+			'refs/pr/3',
+		],
+		[
+			'hf://buckets/org/bucket/images/cat%201.png',
+			{ type: 'bucket', name: 'org/bucket' },
+			'images/cat 1.png',
+			undefined,
+		],
+	] as const)('propagates the attach designation, path, and revision for %s', async (uri, repo, filePath, revision) => {
+		vi.mocked(pathsInfo).mockResolvedValueOnce([{ path: filePath, type: 'file', size: 1 }]);
+		vi.mocked(downloadFile).mockResolvedValueOnce(new Blob([Uint8Array.of(1)]));
+
+		await new HfFsTool('token').run({ op: 'attach', uri });
+
+		expect(pathsInfo).toHaveBeenCalledWith({
+			repo,
+			paths: [filePath],
+			expand: true,
+			accessToken: 'token',
+			...(revision ? { revision } : {}),
+		});
+		expect(downloadFile).toHaveBeenCalledWith({
+			repo,
+			path: filePath,
+			accessToken: 'token',
+			...(revision ? { revision } : {}),
+		});
+	});
+
+	it('passes one abort-aware fetch to attach stat and download and combines SDK request signals', async () => {
+		const abortController = new AbortController();
+		vi.mocked(pathsInfo).mockResolvedValueOnce([{ path: 'image.png', type: 'file', size: 1 }]);
+		vi.mocked(downloadFile).mockResolvedValueOnce(new Blob([Uint8Array.of(1)]));
+
+		await new HfFsTool('token', undefined, abortController.signal).run({
+			op: 'attach',
+			uri: 'hf://models/org/repo/image.png',
+		});
+
+		const pathsFetch = vi.mocked(pathsInfo).mock.calls[0]?.[0].fetch;
+		const downloadFetch = vi.mocked(downloadFile).mock.calls[0]?.[0].fetch;
+		expect(pathsFetch).toBeTypeOf('function');
+		expect(downloadFetch).toBe(pathsFetch);
+		if (!pathsFetch) {
+			throw new Error('Expected attach calls to receive a custom fetch');
+		}
+
+		const sdkAbortController = new AbortController();
+		await pathsFetch('https://huggingface.co/test', { signal: sdkAbortController.signal });
+		const combinedSdkSignal = vi.mocked(fetch).mock.calls.at(-1)?.[1]?.signal;
+		expect(combinedSdkSignal).not.toBe(sdkAbortController.signal);
+		expect(combinedSdkSignal).not.toBe(abortController.signal);
+		sdkAbortController.abort();
+		expect(combinedSdkSignal?.aborted).toBe(true);
+
+		const secondSdkAbortController = new AbortController();
+		await pathsFetch('https://huggingface.co/test', { signal: secondSdkAbortController.signal });
+		const combinedMcpSignal = vi.mocked(fetch).mock.calls.at(-1)?.[1]?.signal;
+		abortController.abort();
+		expect(combinedMcpSignal?.aborted).toBe(true);
+	});
+
+	it.each([
+		['README.md', 'HF_FS_IMAGE_ONLY'],
+		['animation.gif', 'HF_FS_UNSUPPORTED_MEDIA'],
+		['weights.safetensors', 'HF_FS_UNSUPPORTED_MEDIA'],
+		['artifact.unknown', 'HF_FS_UNSUPPORTED_MEDIA'],
+	] as const)('rejects unsupported attach path %s with %s before stat or download', async (filePath, expectedCode) => {
+		try {
+			await new HfFsTool().run({
+				op: 'attach',
+				uri: `hf://models/org/repo/${filePath}`,
+			});
+			throw new Error('Expected attach to reject');
+		} catch (error) {
+			expect(classifyHfFsError(error)?.code).toBe(expectedCode);
+		}
+		expect(pathsInfo).not.toHaveBeenCalled();
+		expect(downloadFile).not.toHaveBeenCalled();
+	});
+
+	it('rejects known stat oversize before download and accepts the exact hard boundary', async () => {
+		vi.mocked(pathsInfo).mockResolvedValueOnce([
+			{ path: 'too-large.png', type: 'file', size: HF_FS_ATTACH_MAX_BYTES + 1 },
+		]);
+		const tooLarge = new HfFsTool().run({
+			op: 'attach',
+			uri: 'hf://models/org/repo/too-large.png',
+		});
+		await expect(tooLarge).rejects.toThrow('Image is too large to attach');
+		await expect(tooLarge).rejects.toMatchObject({ code: 'HF_FS_IMAGE_TOO_LARGE' });
+		expect(downloadFile).not.toHaveBeenCalled();
+
+		const boundaryBytes = new Uint8Array(HF_FS_ATTACH_MAX_BYTES);
+		vi.mocked(pathsInfo).mockResolvedValueOnce([{ path: 'boundary.png', type: 'file', size: HF_FS_ATTACH_MAX_BYTES }]);
+		vi.mocked(downloadFile).mockResolvedValueOnce(new Blob([boundaryBytes]));
+		const boundary = await new HfFsTool().run({
+			op: 'attach',
+			uri: 'hf://models/org/repo/boundary.png',
+		});
+		expect(boundary.metadata.bytes).toBe(HF_FS_ATTACH_MAX_BYTES);
+		expect(boundary.data.byteLength).toBe(HF_FS_ATTACH_MAX_BYTES);
+	});
+
+	it('classifies invalid stat and Blob sizes as attachment integrity failures', async () => {
+		vi.mocked(pathsInfo).mockResolvedValueOnce([{ path: 'invalid.png', type: 'file', size: -1 }]);
+		const invalidStat = new HfFsTool().run({
+			op: 'attach',
+			uri: 'hf://models/org/repo/invalid.png',
+		});
+		await expect(invalidStat).rejects.toMatchObject({ code: 'HF_FS_ATTACHMENT_INTEGRITY' });
+		expect(classifyHfFsError(await invalidStat.catch((error: unknown) => error))).toMatchObject({
+			code: 'HF_FS_ATTACHMENT_INTEGRITY',
+			suggestedOperation: 'stat',
+		});
+		expect(downloadFile).not.toHaveBeenCalled();
+
+		vi.mocked(pathsInfo).mockResolvedValueOnce([{ path: 'invalid.png', type: 'file', size: 1 }]);
+		vi.mocked(downloadFile).mockResolvedValueOnce({
+			size: Number.NaN,
+			stream: vi.fn(),
+		} as unknown as Blob);
+		await expect(
+			new HfFsTool().run({
+				op: 'attach',
+				uri: 'hf://models/org/repo/invalid.png',
+			})
+		).rejects.toMatchObject({ code: 'HF_FS_ATTACHMENT_INTEGRITY' });
+	});
+
+	it('checks lazy Blob.size before consuming the payload', async () => {
+		const stream = vi.fn(() => new ReadableStream<Uint8Array>());
+		vi.mocked(pathsInfo).mockResolvedValueOnce([{ path: 'image.webp', type: 'file', size: 1 }]);
+		vi.mocked(downloadFile).mockResolvedValueOnce({
+			size: HF_FS_ATTACH_MAX_BYTES + 1,
+			stream,
+		} as unknown as Blob);
+
+		await expect(
+			new HfFsTool().run({
+				op: 'attach',
+				uri: 'hf://models/org/repo/image.webp',
+			})
+		).rejects.toThrow('Image is too large to attach');
+		expect(stream).not.toHaveBeenCalled();
+	});
+
+	it('enforces a lower complete-file max without truncating', async () => {
+		vi.mocked(pathsInfo).mockResolvedValueOnce([{ path: 'image.png', type: 'file', size: 4 }]);
+		await expect(
+			new HfFsTool().run({
+				op: 'attach',
+				uri: 'hf://models/org/repo/image.png',
+				max_bytes: 3,
+			})
+		).rejects.toThrow('complete-file limit is 3 bytes');
+		expect(downloadFile).not.toHaveBeenCalled();
+
+		vi.mocked(pathsInfo).mockResolvedValueOnce([{ path: 'image.png', type: 'file', size: 3 }]);
+		vi.mocked(downloadFile).mockResolvedValueOnce(new Blob([Uint8Array.from([1, 2, 3])]));
+		const exact = await new HfFsTool().run({
+			op: 'attach',
+			uri: 'hf://models/org/repo/image.png',
+			max_bytes: 3,
+		});
+		expect(exact.data).toEqual(Uint8Array.from([1, 2, 3]));
+	});
+
+	it('cancels and rejects a stream that overruns its declared Blob.size', async () => {
+		const cancel = vi.fn();
+		vi.mocked(pathsInfo).mockResolvedValueOnce([{ path: 'image.png', type: 'file', size: 2 }]);
+		vi.mocked(downloadFile).mockResolvedValueOnce(createStreamingBlob(2, [Uint8Array.from([1, 2, 3])], cancel, false));
+
+		const run = new HfFsTool().run({
+			op: 'attach',
+			uri: 'hf://models/org/repo/image.png',
+		});
+		await expect(run).rejects.toThrow('exceeded its declared Blob size');
+		await expect(run).rejects.toMatchObject({ code: 'HF_FS_ATTACHMENT_INTEGRITY' });
+		expect(cancel).toHaveBeenCalledOnce();
+	});
+
+	it('keeps stream overruns above the configured limit classified as too large', async () => {
+		const cancel = vi.fn();
+		vi.mocked(pathsInfo).mockResolvedValueOnce([{ path: 'image.png', type: 'file', size: 2 }]);
+		vi.mocked(downloadFile).mockResolvedValueOnce(createStreamingBlob(2, [Uint8Array.from([1, 2, 3])], cancel, false));
+
+		const run = new HfFsTool().run({
+			op: 'attach',
+			uri: 'hf://models/org/repo/image.png',
+			max_bytes: 2,
+		});
+		await expect(run).rejects.toMatchObject({ code: 'HF_FS_IMAGE_TOO_LARGE' });
+		expect(cancel).toHaveBeenCalledOnce();
+	});
+
+	it('rejects a stream that ends before its declared Blob.size', async () => {
+		vi.mocked(pathsInfo).mockResolvedValueOnce([{ path: 'image.png', type: 'file', size: 3 }]);
+		vi.mocked(downloadFile).mockResolvedValueOnce(createStreamingBlob(3, [Uint8Array.from([1, 2])]));
+
+		const run = new HfFsTool().run({
+			op: 'attach',
+			uri: 'hf://models/org/repo/image.png',
+		});
+		await expect(run).rejects.toThrow('ended after 2 bytes; expected 3 bytes');
+		await expect(run).rejects.toMatchObject({ code: 'HF_FS_ATTACHMENT_INTEGRITY' });
+	});
+
+	it('promptly rejects and cancels a pending attachment stream when aborted', async () => {
+		const abortController = new AbortController();
+		const cancel = vi.fn();
+		const removeEventListener = vi.spyOn(abortController.signal, 'removeEventListener');
+		vi.mocked(pathsInfo).mockResolvedValueOnce([{ path: 'image.png', type: 'file', size: 1 }]);
+		vi.mocked(downloadFile).mockResolvedValueOnce(createStreamingBlob(1, [], cancel, false));
+
+		const run = new HfFsTool(undefined, undefined, abortController.signal).run({
+			op: 'attach',
+			uri: 'hf://models/org/repo/image.png',
+		});
+		await vi.waitFor(() => expect(downloadFile).toHaveBeenCalledOnce());
+		const abortReason = new DOMException('MCP request cancelled', 'AbortError');
+		abortController.abort(abortReason);
+
+		let timeout: ReturnType<typeof setTimeout> | undefined;
+		try {
+			await expect(
+				Promise.race([
+					run,
+					new Promise<never>((_resolve, reject) => {
+						timeout = setTimeout(() => reject(new Error('Attachment abort did not reject promptly')), 100);
+					}),
+				])
+			).rejects.toBe(abortReason);
+		} finally {
+			clearTimeout(timeout);
+		}
+		expect(cancel).toHaveBeenCalledWith(abortReason);
+		expect(removeEventListener).toHaveBeenCalledWith('abort', expect.any(Function));
+	});
+
+	it('applies canonical attach argument and direct-file validation', async () => {
+		await expect(
+			new HfFsTool().run({
+				op: 'attach',
+				uri: 'hf://models/org/repo/image.png',
+				offset: 1,
+			})
+		).rejects.toThrow('offset is not valid for attach');
+		await expect(new HfFsTool().run({ op: 'attach', uri: 'hf://docs/transformers/image.png' })).rejects.toThrow(
+			'attach requires a direct repository or bucket file URI'
+		);
+		await expect(new HfFsTool().run({ op: 'attach', uri: 'hf://models/org/repo' })).rejects.toThrow(
+			'attach requires a direct repository or bucket file URI'
+		);
+		expect(pathsInfo).not.toHaveBeenCalled();
+		expect(downloadFile).not.toHaveBeenCalled();
+	});
+
+	it('uses existing not-found and not-a-file attachment errors', async () => {
+		vi.mocked(pathsInfo).mockResolvedValueOnce([]);
+		try {
+			await new HfFsTool().run({
+				op: 'attach',
+				uri: 'hf://models/org/repo/missing.png',
+			});
+			throw new Error('Expected attach to reject');
+		} catch (error) {
+			expect(classifyHfFsError(error)?.code).toBe('HF_FS_NOT_FOUND');
+		}
+
+		vi.mocked(pathsInfo).mockResolvedValueOnce([{ path: 'directory.png', type: 'directory', size: 0 }]);
+		try {
+			await new HfFsTool().run({
+				op: 'attach',
+				uri: 'hf://models/org/repo/directory.png',
+			});
+			throw new Error('Expected attach to reject');
+		} catch (error) {
+			expect(classifyHfFsError(error)?.code).toBe('HF_FS_NOT_A_FILE');
+		}
+		expect(downloadFile).not.toHaveBeenCalled();
 	});
 });

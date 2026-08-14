@@ -11,6 +11,7 @@ import { callGradioTool, applyResultPostProcessing, type GradioToolCallOptions }
 import { parseDisabledTools } from './utils/disabled-tools.js';
 import { createProgressRelay } from './utils/progress-relay.js';
 import { registerProxyAppResource, rewriteProxyAppToolMeta } from './utils/proxy-apps.js';
+import { createRemoteToolAnnotations } from './utils/remote-tool-annotations.js';
 import * as hfMcp from '@llmindset/hf-mcp';
 import { fetchWithProfile, NETWORK_FETCH_PROFILES } from '@llmindset/hf-mcp/network';
 
@@ -563,10 +564,7 @@ export function registerRemoteTools(
 				title: title,
 				description,
 				inputSchema: z.object(schemaShape),
-				annotations: {
-					openWorldHint: true,
-					title: title,
-				},
+				annotations: createRemoteToolAnnotations(title),
 				_meta: meta,
 			},
 			handler

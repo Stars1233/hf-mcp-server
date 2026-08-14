@@ -762,6 +762,8 @@ export const HF_SANDBOX_TOOL_CONFIG = {
 	outputSchema: createSandboxOutputSchema(),
 	annotations: {
 		title: 'Hugging Face Sandbox',
+		destructiveHint: true,
+		idempotentHint: false,
 		readOnlyHint: false,
 		openWorldHint: true,
 	},
@@ -1184,9 +1186,10 @@ export const HF_SANDBOX_EXEC_TOOL_CONFIG = {
 	outputSchema: createSandboxExecOutputSchema(),
 	annotations: {
 		title: 'Hugging Face Sandbox Exec',
+		destructiveHint: true,
+		idempotentHint: false,
 		readOnlyHint: false,
 		openWorldHint: true,
-		destructiveHint: true,
 	},
 } as const;
 
@@ -1370,6 +1373,7 @@ export const HF_SANDBOX_FS_TOOL_CONFIG = {
 	annotations: {
 		title: 'Hugging Face Sandbox Files',
 		destructiveHint: true,
+		idempotentHint: false,
 		readOnlyHint: false,
 		openWorldHint: true,
 	},

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { parseCommandArgs, type CommandOptionMap } from './command-args.js';
 
-export const HF_FS_OPERATIONS = ['ls', 'cat', 'stat', 'find', 'search'] as const;
+export const HF_FS_OPERATIONS = ['ls', 'cat', 'attach', 'stat', 'find', 'search'] as const;
 export const HF_FS_ENTRY_TYPES = ['file', 'dir', 'repo', 'bucket', 'collection', 'paper', 'link'] as const;
 const HF_FS_SEARCH_SORTS = [
 	'createdAt',
@@ -37,12 +37,13 @@ export interface HfFsParams {
 	limit?: number;
 }
 
-export const HF_FS_DESCRIPTION = `Use to access the Hugging Face Hub. Navigate resources with ls, cat, find, stat, and search over hf:// URIs. Roots: hf://models, hf://datasets, hf://spaces, hf://buckets, hf://collections, hf://papers, hf://docs. For papers, ls hf://papers/ARXIV_ID to discover related resources; cat hf://papers/ARXIV_ID/paper.md or metadata.json. Documentation paths include the current version from each product's llms.txt manifest.
+export const HF_FS_DESCRIPTION = `Use to access the Hugging Face Hub. Navigate resources with ls, cat, attach, find, stat, and search over hf:// URIs. Roots: hf://models, hf://datasets, hf://spaces, hf://buckets, hf://collections, hf://papers, hf://docs. For papers, ls hf://papers/ARXIV_ID to discover related resources; cat hf://papers/ARXIV_ID/paper.md or metadata.json. Documentation paths include the current version from each product's llms.txt manifest.
 
 Grammar; each token below is one args array element:
   ls     URI [(-R|-r|-lR|-laR|--recursive)] [(-l|-a|-la|-al|--long)] [--glob GLOB]
              [(-type|--type|--entry-type) TYPE] [--sort SORT] [(-limit|--limit) N]
   cat    URI [RELATIVE_PATH] [(-offset|--offset) N] [(-max-bytes|--max-bytes) N]
+  attach URI [--max-bytes N]
   stat   URI [RELATIVE_PATH]
   find   URI [(-R|-r|--recursive)] [(-name|--name|--glob) GLOB] [(-path|--path) GLOB]
              [(-type|--type|--entry-type) TYPE] [(-limit|--limit) N]
@@ -55,7 +56,11 @@ SORT = createdAt|downloads|likes|lastModified|likes30d|trendingScore|mainSize|id
 URI uses hf://, a typed shorthand such as models/OWNER/REPO, or a canonical https://huggingface.co URL. QUERY and GLOB are each one string token.
 Search URI: hf://models|datasets|spaces[/OWNER], hf://collections[/OWNER], any hf://docs scope, or exactly hf://papers; not hf://.
 Repository and collection searches may omit QUERY to browse or filter; documentation and paper searches require it.
-Search joins multiple positional QUERY tokens with spaces. Cat and stat join one RELATIVE_PATH token to URI.
+Search joins multiple positional QUERY tokens with spaces. Cat and stat join one RELATIVE_PATH token to URI. Attach accepts exactly one complete URI and no RELATIVE_PATH or offset.
+Discover before access: use search, ls, or find to locate targets; use stat when target type is uncertain; then reuse the returned URI, or the Target URI for links, verbatim.
+Cat reads confirmed UTF-8 text files only. It rejects repositories, directories, model weights, archives, images, media, Parquet, and other binary content. Use stat for metadata instead.
+Attach returns a complete JPEG, PNG, or WebP repository or bucket file as image content. It classifies only by file extension, never truncates, and has a default and hard limit of 4 MiB; --max-bytes may only lower it.
+Find recursively matches names and paths within an owner namespace, repository, or supported documentation scope. Use search—not an unscoped find—for global repository, collection, documentation, paper, or Space discovery.
 Long-list flags are accepted for compatibility; hf_fs listings are already structured, so they do not alter output.
 Find is already recursive, so recursive flags are accepted without altering behavior.
 Space search: hf://spaces uses semantic search; repeat --tag to require tags, or use --kind mcp for --tag mcp-server. hf://spaces/OWNER uses owner-scoped keyword search.
@@ -63,6 +68,7 @@ Documentation: ls hf://docs for products; search any docs scope; use returned hf
 Trending listings: ls hf://models/trending, hf://datasets/trending, or hf://spaces/trending. They return up to 20 entries.
 Trending paths imply trending order; --sort trending|trendingScore is redundant but valid.
 Trending papers: ls hf://papers/trending.
+Sort is route-specific: use it with search or supported owner/collection listings, never with repository file listings or documentation. For global trending repositories, use the /trending listing URI.
 TYPE filters mixed results; omit it when the URI already fixes the result type.
 Limits and path-specific behavior are documented at hf://README.md.
 Omit --limit and --sort unless the request asks for a cap, ordering, or exhaustive results.
@@ -116,6 +122,10 @@ const CAT_FLAGS: CommandOptionMap = {
 	'--offset': { key: 'offset', kind: 'integer' },
 };
 
+const ATTACH_FLAGS: CommandOptionMap = {
+	'--max-bytes': { key: 'max_bytes', kind: 'integer' },
+};
+
 const FIND_FLAGS: CommandOptionMap = {
 	'-R': { key: 'recursive_compat', kind: 'boolean' },
 	'-r': { key: 'recursive_compat', kind: 'boolean' },
@@ -147,6 +157,7 @@ const SEARCH_FLAGS: CommandOptionMap = {
 const FLAGS: Readonly<Record<HfFsOperation, CommandOptionMap>> = {
 	ls: LS_FLAGS,
 	cat: CAT_FLAGS,
+	attach: ATTACH_FLAGS,
 	stat: {},
 	find: FIND_FLAGS,
 	search: SEARCH_FLAGS,
@@ -345,8 +356,17 @@ function validateParsedParams(params: HfFsParams): void {
 	) {
 		throw new Error('EINVAL: --tag and --kind are supported only with search hf://spaces');
 	}
-	if (params.max_bytes !== undefined && (params.max_bytes < 0 || params.max_bytes > 80_000)) {
-		throw new Error('EINVAL: max_bytes must be between 0 and 80000');
+	if (
+		params.max_bytes !== undefined &&
+		(params.op === 'attach'
+			? params.max_bytes < 1 || params.max_bytes > 4 * 1024 * 1024
+			: params.max_bytes < 0 || params.max_bytes > 80_000)
+	) {
+		throw new Error(
+			params.op === 'attach'
+				? 'EINVAL: attach max_bytes must be between 1 and 4194304'
+				: 'EINVAL: max_bytes must be between 0 and 80000'
+		);
 	}
 	if (params.offset !== undefined && params.offset < 0) {
 		throw new Error('EINVAL: offset must be non-negative');

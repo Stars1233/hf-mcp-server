@@ -24,9 +24,9 @@ import {
 } from '@llmindset/hf-mcp';
 import { extractAuthBouquetAndMix } from '../../../src/server/utils/auth-utils.js';
 import { BOUQUETS } from '../../../src/shared/bouquet-presets.js';
-import { GRADIO_IMAGE_FILTER_FLAG, README_INCLUDE_FLAG } from '../../../src/shared/behavior-flags.js';
+import { GRADIO_IMAGE_FILTER_FLAG } from '../../../src/shared/behavior-flags.js';
 
-const BEHAVIOR_FLAG_IDS = new Set<string>([HF_FILES_FLAG, GRADIO_IMAGE_FILTER_FLAG, README_INCLUDE_FLAG]);
+const BEHAVIOR_FLAG_IDS = new Set<string>([HF_FILES_FLAG, GRADIO_IMAGE_FILTER_FLAG]);
 const normalizeBuiltInTools = (toolIds: readonly string[]): string[] => [
 	...new Set(toolIds.filter((toolId) => !BEHAVIOR_FLAG_IDS.has(toolId))),
 ];
@@ -85,10 +85,10 @@ describe('extractBouquetAndMix', () => {
 	});
 
 	it('should parse comma-separated mix list', () => {
-		const headers = { 'x-mcp-mix': 'hf_api, jobs ,hub_repo_details_readme' };
+		const headers = { 'x-mcp-mix': 'hf_api, jobs ,hub_repo_details' };
 		const result = extractAuthBouquetAndMix(headers);
 
-		expect(result.mix).toEqual(['hf_api', 'jobs', 'hub_repo_details_readme']);
+		expect(result.mix).toEqual(['hf_api', 'jobs', 'hub_repo_details']);
 	});
 
 	it('should not use DEFAULT_HF_TOKEN unless explicitly allowed', () => {
@@ -795,7 +795,7 @@ describe('ToolSelectionStrategy', () => {
 
 	describe('Behavior flags', () => {
 		const flaggedSettings: AppSettings = {
-			builtInTools: [HF_FILES_FLAG, README_INCLUDE_FLAG, GRADIO_IMAGE_FILTER_FLAG],
+			builtInTools: [HF_FILES_FLAG, GRADIO_IMAGE_FILTER_FLAG],
 			spaceTools: [],
 		};
 
@@ -808,7 +808,6 @@ describe('ToolSelectionStrategy', () => {
 
 			expect(result.enabledToolIds).toEqual([HF_FS_TOOL_ID]);
 			expect(result.behaviorFlags).toEqual({
-				allowReadmeInclude: true,
 				stripGradioImages: true,
 				enableHfFsWrite: true,
 			});
@@ -822,7 +821,6 @@ describe('ToolSelectionStrategy', () => {
 
 			expect(result.enabledToolIds).toEqual([HF_FS_TOOL_ID]);
 			expect(result.behaviorFlags).toEqual({
-				allowReadmeInclude: false,
 				stripGradioImages: false,
 				enableHfFsWrite: false,
 			});

@@ -31,10 +31,12 @@ import { RESOURCES_DIRECTORY_READ_METHOD } from '../skills/skill-directory-schem
 import { SKILLS_GET_METHOD, SKILLS_LIST_METHOD } from '../skills/skill-method-schema.js';
 import { getProxyToolsConfig } from '../utils/proxy-tools-config.js';
 import { BOUQUET_FALLBACK } from '../../shared/settings.js';
+import type { AppSettings } from '../../shared/settings.js';
 import { getErrorLogFields } from '../utils/observability.js';
 import { isProgressToken } from '../utils/progress-token.js';
-import type { SubscriptionMethod } from '../../shared/transport-metrics.js';
+import type { ServerDiscoverOutcome, SubscriptionMethod } from '../../shared/transport-metrics.js';
 import { handleServerCardRequest, SERVER_CARD_PATH } from '../server-card.js';
+import { getDirectToolCallSettings, withoutDiscoverySelectionHeaders } from '../utils/direct-tool-settings.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -64,6 +66,7 @@ interface JsonRpcRequestBody {
 		capabilities?: unknown;
 		protocolVersion?: unknown;
 		name?: string;
+		arguments?: unknown;
 		notifications?: unknown;
 		_meta?: Record<string, unknown>;
 	};
@@ -71,6 +74,7 @@ interface JsonRpcRequestBody {
 
 interface ModernRequestData {
 	headers: Record<string, string>;
+	factoryHeaders: Record<string, string>;
 	clientInfo?: { name: string; version: string };
 	requestId: string;
 	isAuthenticated: boolean;
@@ -78,6 +82,7 @@ interface ModernRequestData {
 	useFullServer: boolean;
 	skipGradio: boolean;
 	discoveryOnly: boolean;
+	userSettings?: AppSettings;
 	protocolVersion: string;
 	clientCapabilities: Record<string, unknown>;
 	userHash?: string;
@@ -138,26 +143,84 @@ export function summarizeSubscriptionRequest(method: SubscriptionMethod, params:
 	return parts.length > 0 ? `notifications:${parts.join(',')}` : 'notifications:empty';
 }
 
-function isErrorResponseBody(body: string): boolean {
+export interface CapturedResponseSummary {
+	isError: boolean;
+	jsonRpcErrorCode?: number;
+	truncated?: boolean;
+}
+
+function inspectResponseBody(body: string): CapturedResponseSummary {
 	const ssePayloads = body
-		.split(/\r?\n/u)
-		.filter((line) => line.startsWith('data:'))
-		.map((line) => line.slice(5).trim());
+		.split(/\r?\n\r?\n/u)
+		.map((event) =>
+			event
+				.split(/\r?\n/u)
+				.filter((line) => line === 'data' || line.startsWith('data:'))
+				.map((line) => {
+					if (line === 'data') return '';
+					const value = line.slice(5);
+					return value.startsWith(' ') ? value.slice(1) : value;
+				})
+				.join('\n')
+		)
+		.filter((payload) => payload.length > 0);
 	const payloads = ssePayloads.length > 0 ? ssePayloads : [body];
+	let isError = false;
+	let jsonRpcErrorCode: number | undefined;
 
 	for (const payload of payloads) {
 		try {
 			const parsed = JSON.parse(payload) as
 				{ error?: unknown; result?: { isError?: unknown } } | { error?: unknown; result?: { isError?: unknown } }[];
 			const responses = Array.isArray(parsed) ? parsed : [parsed];
-			if (responses.some((response) => response.error !== undefined || response.result?.isError === true)) {
-				return true;
+			for (const response of responses) {
+				if (response.error !== undefined) {
+					isError = true;
+					if (
+						jsonRpcErrorCode === undefined &&
+						typeof response.error === 'object' &&
+						response.error !== null &&
+						'code' in response.error &&
+						typeof response.error.code === 'number'
+					) {
+						jsonRpcErrorCode = response.error.code;
+					}
+				}
+				if (response.result?.isError === true) {
+					isError = true;
+				}
 			}
 		} catch {
 			// Ignore SSE control events and malformed response fragments.
 		}
 	}
-	return false;
+	return {
+		isError,
+		...(jsonRpcErrorCode !== undefined ? { jsonRpcErrorCode } : {}),
+	};
+}
+
+export function classifyServerDiscoverOutcome(input: {
+	httpStatus: number;
+	response: CapturedResponseSummary;
+}): ServerDiscoverOutcome {
+	const { httpStatus, response } = input;
+	if (httpStatus === 401 || httpStatus === 403) return 'authRejected';
+	if (response.jsonRpcErrorCode === -32603 || httpStatus >= 500) return 'internalServerError';
+	if (response.jsonRpcErrorCode === -32020) return 'headerBodyMismatch';
+	if (response.jsonRpcErrorCode === -32022) return 'unsupportedVersion';
+	if (
+		response.jsonRpcErrorCode === -32700 ||
+		response.jsonRpcErrorCode === -32600 ||
+		response.jsonRpcErrorCode === -32601 ||
+		response.jsonRpcErrorCode === -32602 ||
+		httpStatus === 400
+	) {
+		return 'invalidRequest';
+	}
+	if (response.truncated) return 'otherError';
+	if (httpStatus < 200 || httpStatus >= 300 || response.isError) return 'otherError';
+	return 'success';
 }
 
 export class MetricsResponseCapture {
@@ -198,8 +261,12 @@ export class MetricsResponseCapture {
 	}
 
 	isError(): boolean {
-		if (this.truncated) return false;
-		return isErrorResponseBody(Buffer.concat(this.chunks, this.capturedBytes).toString('utf8'));
+		return this.summary().isError;
+	}
+
+	summary(): CapturedResponseSummary {
+		if (this.truncated) return { isError: false, truncated: true };
+		return inspectResponseBody(Buffer.concat(this.chunks, this.capturedBytes).toString('utf8'));
 	}
 }
 
@@ -431,8 +498,8 @@ export class StatelessHttpTransport extends BaseTransport {
 				}
 
 				const result = await this.serverFactory(
-					requestData.headers,
-					requestData.discoveryOnly ? BOUQUET_FALLBACK : undefined,
+					requestData.factoryHeaders,
+					requestData.discoveryOnly ? BOUQUET_FALLBACK : requestData.userSettings,
 					requestData.skipGradio,
 					{
 						requestId: requestData.requestId,
@@ -555,6 +622,13 @@ export class StatelessHttpTransport extends BaseTransport {
 		const protocolVersion = this.extractModernProtocolVersion(requestBody);
 		const clientCapabilities = this.extractModernClientCapabilities(requestBody);
 		const ipAddress = this.extractIpAddress(req.headers, req.ip);
+		const isServerDiscover = requestBody?.method === 'server/discover';
+		let serverDiscoverOutcomeTracked = false;
+		const trackServerDiscoverOutcome = (outcome: ServerDiscoverOutcome): void => {
+			if (!isServerDiscover || serverDiscoverOutcomeTracked) return;
+			this.metrics.trackServerDiscoverOutcome(outcome);
+			serverDiscoverOutcomeTracked = true;
+		};
 
 		this.trackIpAddress(ipAddress);
 		this.trackProtocolRequest('modern', protocolVersion);
@@ -564,10 +638,19 @@ export class StatelessHttpTransport extends BaseTransport {
 
 		const authResult = await this.validateAuthAndTrackMetrics(headers);
 		if (!authResult.shouldContinue) {
+			trackServerDiscoverOutcome('authRejected');
 			res.set('WWW-Authenticate', buildOAuthResourceHeader(req));
 			res.status(authResult.statusCode || 401).send('Unauthorized');
 			return;
 		}
+
+		const disabledTool = disabledToolCallName(requestBody);
+		if (disabledTool) {
+			this.trackMethodCall(trackingName, startTime, true, clientInfo);
+			res.status(200).json(JsonRpcErrors.invalidParams(disabledToolMessage(disabledTool), extractJsonRpcId(req.body)));
+			return;
+		}
+
 		this.trackNewConnection();
 		if (clientInfo) {
 			// Modern HTTP is request-scoped. Mark the identity connected only
@@ -586,7 +669,7 @@ export class StatelessHttpTransport extends BaseTransport {
 		);
 		this.trackProtocolToolCall(trackingName, 'modern', protocolVersion, clientInfo);
 
-		if (requestBody?.method === 'server/discover') {
+		if (isServerDiscover) {
 			logSystemEvent('server_discover', requestId, {
 				requestId,
 				protocolEra: 'modern',
@@ -601,19 +684,21 @@ export class StatelessHttpTransport extends BaseTransport {
 			});
 		}
 
-		const useFullServer =
-			requestBody?.method === 'server/discover' ||
-			this.shouldHandle(requestBody, clientInfo?.name, headers['user-agent']);
-		const skipGradio = requestBody?.method === 'server/discover' || this.skipGradioSetup(requestBody);
+		const useFullServer = isServerDiscover || this.shouldHandle(requestBody, clientInfo?.name, headers['user-agent']);
+		const userSettings = isServerDiscover ? undefined : getDirectToolCallSettings(requestBody, headers);
+		const skipGradio = isServerDiscover || userSettings !== undefined || this.skipGradioSetup(requestBody);
+		const factoryHeaders = userSettings !== undefined ? withoutDiscoverySelectionHeaders(headers) : headers;
 		const requestData: ModernRequestData = {
 			headers,
+			factoryHeaders,
 			clientInfo,
 			requestId,
 			isAuthenticated: authResult.userIdentified,
 			authenticatedUser: authResult.authenticatedUser,
 			useFullServer,
 			skipGradio,
-			discoveryOnly: requestBody?.method === 'server/discover',
+			discoveryOnly: isServerDiscover,
+			userSettings,
 			protocolVersion,
 			clientCapabilities,
 			userHash,
@@ -639,8 +724,15 @@ export class StatelessHttpTransport extends BaseTransport {
 				await this.modernNodeHandler?.(req, res, req.body);
 			});
 
-			const responseIsError = res.statusCode >= 400 || responseCapture.isError();
+			const responseSummary = responseCapture.summary();
+			const responseIsError = res.statusCode >= 400 || responseSummary.isError || responseSummary.truncated === true;
 			this.trackMethodCall(trackingName, startTime, responseIsError, clientInfo);
+			trackServerDiscoverOutcome(
+				classifyServerDiscoverOutcome({
+					httpStatus: res.statusCode,
+					response: responseSummary,
+				})
+			);
 			if (res.statusCode >= 400) {
 				this.trackError(res.statusCode);
 			}
@@ -656,6 +748,7 @@ export class StatelessHttpTransport extends BaseTransport {
 				'Modern MCP request completed'
 			);
 		} catch (error) {
+			trackServerDiscoverOutcome('internalServerError');
 			this.trackMethodCall(trackingName, startTime, true, clientInfo);
 			this.trackError(500, error instanceof Error ? error : new Error(String(error)));
 			logger.error({ error, method: trackingName, requestId }, 'Error handling modern MCP request');
@@ -765,6 +858,8 @@ export class StatelessHttpTransport extends BaseTransport {
 			res.status(200).json(JsonRpcErrors.invalidParams(disabledToolMessage(disabledTool), extractJsonRpcId(req.body)));
 			return;
 		}
+		const directToolSettings = getDirectToolCallSettings(requestBody, headers);
+		const factoryHeaders = directToolSettings !== undefined ? withoutDiscoverySelectionHeaders(headers) : headers;
 
 		// Analytics mode session tracking
 		if (this.analyticsMode) {
@@ -923,7 +1018,7 @@ export class StatelessHttpTransport extends BaseTransport {
 			if (useFullServer) {
 				// Create new server instance using factory with request headers and bouquet
 				// Skip Gradio endpoints for initialize requests or non-Gradio tool calls
-				const skipGradio = this.skipGradioSetup(requestBody);
+				const skipGradio = directToolSettings !== undefined || this.skipGradioSetup(requestBody);
 
 				// Pass session info to server factory for query logging
 				const sessionInfoForLogging = {
@@ -936,7 +1031,7 @@ export class StatelessHttpTransport extends BaseTransport {
 					clientInfo,
 					authenticatedUser: authResult.authenticatedUser,
 				};
-				const result = await this.serverFactory(headers, undefined, skipGradio, sessionInfoForLogging);
+				const result = await this.serverFactory(factoryHeaders, directToolSettings, skipGradio, sessionInfoForLogging);
 				server = result.server;
 			} else {
 				// Create fresh stub responder for simple requests

@@ -178,6 +178,38 @@ describe('MetricsCounter', () => {
 		]);
 	});
 
+	it('aggregates server discovery outcomes in a stable low-cardinality order', () => {
+		const metrics = new MetricsCounter();
+		metrics.trackServerDiscoverOutcome('unsupportedVersion');
+		metrics.trackServerDiscoverOutcome('success');
+		metrics.trackServerDiscoverOutcome('headerBodyMismatch');
+		metrics.trackServerDiscoverOutcome('success');
+
+		expect(formatMetricsForAPI(metrics.getMetrics(), 'streamableHttpJson', true).serverDiscoverOutcomes).toEqual([
+			expect.objectContaining({
+				outcome: 'success',
+				count: 2,
+				firstSeen: expect.any(String),
+				lastSeen: expect.any(String),
+			}),
+			expect.objectContaining({
+				outcome: 'headerBodyMismatch',
+				count: 1,
+			}),
+			expect.objectContaining({
+				outcome: 'unsupportedVersion',
+				count: 1,
+			}),
+		]);
+	});
+
+	it('formats metrics created before discovery outcome tracking was available', () => {
+		const metrics = new MetricsCounter().getMetrics();
+		delete metrics.serverDiscoverOutcomes;
+
+		expect(formatMetricsForAPI(metrics, 'streamableHttpJson', true).serverDiscoverOutcomes).toEqual([]);
+	});
+
 	it('bounds subscription attempt dimensions and client identity lengths', () => {
 		const metrics = new MetricsCounter();
 
