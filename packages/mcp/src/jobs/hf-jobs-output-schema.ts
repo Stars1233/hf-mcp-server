@@ -19,7 +19,7 @@ export const HF_JOBS_OPERATIONS = [
 const ownerSchema = z.strictObject({
 	id: z.string(),
 	name: z.string(),
-	type: z.enum(['user', 'org']),
+	type: z.enum(['user', 'org']).optional(),
 });
 
 const jobStatusSchema = z.strictObject({

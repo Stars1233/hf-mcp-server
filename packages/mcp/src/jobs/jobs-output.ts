@@ -7,7 +7,7 @@ import {
 	type HfJobsOutput,
 	type HfScheduledJobOutput,
 } from './hf-jobs-output-schema.js';
-import type { JobInfo, JobSpec, ScheduledJobInfo } from './types.js';
+import type { JobInfo, JobOwner, JobSpec, ScheduledJobInfo } from './types.js';
 
 export interface JobsCommandResult {
 	formatted: string;
@@ -19,6 +19,19 @@ export interface JobsCommandResult {
 
 export interface HfJobsToolResult extends ToolResult {
 	structuredContent: HfJobsOutput;
+}
+
+/**
+ * The Jobs API's owner/createdBy objects are not schema-stable (e.g. extra
+ * profile fields, or a missing `type`). Pick only the fields the output
+ * schema promises instead of spreading the raw API object.
+ */
+function normalizeOwner(owner: JobOwner): { id: string; name: string; type?: 'user' | 'org' } {
+	return {
+		id: owner.id,
+		name: owner.name,
+		...(owner.type === 'user' || owner.type === 'org' ? { type: owner.type } : {}),
+	};
 }
 
 export function toHfJobOutput(
@@ -48,8 +61,8 @@ export function toHfJobOutput(
 				: {}),
 			...(job.status.expose_urls ? { expose_urls: job.status.expose_urls.map(redact) } : {}),
 		},
-		owner: { ...job.owner },
-		...(job.createdBy ? { created_by: { ...job.createdBy } } : {}),
+		owner: normalizeOwner(job.owner),
+		...(job.createdBy ? { created_by: normalizeOwner(job.createdBy) } : {}),
 		...(job.tags ? { tags: job.tags.map(redact) } : {}),
 		...(job.labels
 			? { labels: Object.fromEntries(Object.entries(job.labels).map(([key, value]) => [key, redact(value)])) }
@@ -70,7 +83,7 @@ export function toHfScheduledJobOutput(
 		suspended: job.suspend,
 		...(job.lastRun ? { last_run: job.lastRun } : {}),
 		...(job.nextRun ? { next_run: job.nextRun } : {}),
-		owner: { ...job.owner },
+		owner: normalizeOwner(job.owner),
 		created_at: job.createdAt,
 		job_spec: {
 			...(job.jobSpec.dockerImage ? { docker_image: redact(job.jobSpec.dockerImage) } : {}),
