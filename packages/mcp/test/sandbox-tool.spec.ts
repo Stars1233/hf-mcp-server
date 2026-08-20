@@ -481,6 +481,35 @@ describe('HfSandboxFsTool', () => {
 		expect(result).toEqual({ op: 'stat', path: '/nope', exists: false });
 	});
 
+	it('projects stat responses without leaking or accepting upstream overrides', async () => {
+		const rpcClient = createRpcClient();
+		vi.mocked(rpcClient.statPath).mockResolvedValueOnce({
+			name: 'out.txt',
+			path: '/upstream/path',
+			type: 'file',
+			size: 18,
+			mtime_ms: 1,
+			mode: '644',
+			inode: 42,
+			exists: false,
+			op: 'rm',
+		});
+		const tool = new HfSandboxFsTool('hf-token', true, 'evalstate', createJobsClient(), rpcClient);
+
+		const result = await tool.run({ cmd: 'stat', args: [HANDLE, '/work/out.txt'] });
+
+		expect(result).toEqual({
+			op: 'stat',
+			path: '/work/out.txt',
+			exists: true,
+			type: 'file',
+			size: 18,
+			mtime_ms: 1,
+			mode: '644',
+		});
+		expect(HF_SANDBOX_FS_TOOL_CONFIG.outputSchema.parse(result)).toEqual(result);
+	});
+
 	it('writes text and base64 content, requiring exactly one', async () => {
 		const rpcClient = createRpcClient();
 		const tool = new HfSandboxFsTool('hf-token', true, 'evalstate', createJobsClient(), rpcClient);

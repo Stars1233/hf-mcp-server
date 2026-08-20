@@ -1456,8 +1456,15 @@ export class HfSandboxFsTool extends SandboxToolBase {
 				if (!entry) {
 					return { op: 'stat', path: parsed.path, exists: false };
 				}
-				const { name: _name, path: _path, ...details } = entry;
-				return { op: 'stat', path: parsed.path, exists: true, ...details };
+				return {
+					op: 'stat',
+					path: parsed.path,
+					exists: true,
+					type: entry.type,
+					size: entry.size,
+					mtime_ms: entry.mtime_ms,
+					mode: entry.mode,
+				};
 			}
 			case 'write':
 				return this.write(conn, parsed);
