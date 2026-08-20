@@ -196,7 +196,7 @@ const gradioLogger: Logger | null = createGradioLogger();
 // Stable session ID for this MCP server instance (process lifetime)
 const mcpServerSessionId = crypto.randomUUID();
 
-function getMcpServerSessionId(): string {
+export function getMcpServerSessionId(): string {
 	return mcpServerSessionId;
 }
 

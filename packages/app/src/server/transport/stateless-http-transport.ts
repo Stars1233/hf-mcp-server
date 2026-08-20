@@ -27,7 +27,10 @@ import { disabledToolCallName, disabledToolMessage } from '../utils/disabled-too
 import { isClientDenied } from '../../shared/client-denylist.js';
 import { getSkillCatalog } from '../skills/skill-catalog-cache.js';
 import { listSkillResources, readSkillResource, readSkillDirectory } from '../skills/skill-resource-data.js';
-import { RESOURCES_DIRECTORY_READ_METHOD } from '../skills/skill-directory-schema.js';
+import {
+	RESOURCES_DIRECTORY_READ_METHOD,
+	ResourcesDirectoryReadParamsSchema,
+} from '../skills/skill-directory-schema.js';
 import { SKILLS_GET_METHOD, SKILLS_LIST_METHOD } from '../skills/skill-method-schema.js';
 import { getProxyToolsConfig } from '../utils/proxy-tools-config.js';
 import { BOUQUET_FALLBACK } from '../../shared/settings.js';
@@ -37,6 +40,12 @@ import { isProgressToken } from '../utils/progress-token.js';
 import type { ServerDiscoverOutcome, SubscriptionMethod } from '../../shared/transport-metrics.js';
 import { handleServerCardRequest, SERVER_CARD_PATH } from '../server-card.js';
 import { getDirectToolCallSettings, withoutDiscoverySelectionHeaders } from '../utils/direct-tool-settings.js';
+import {
+	logSkillEvent,
+	type SkillEventLogger,
+	type SkillEventName,
+	type SkillEventLoggerOptions,
+} from '../utils/skill-event-logger.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -70,6 +79,48 @@ interface JsonRpcRequestBody {
 		notifications?: unknown;
 		_meta?: Record<string, unknown>;
 	};
+}
+
+export interface ClassifiedSkillRequest {
+	methodName: SkillEventName;
+	cursorSupplied: boolean;
+}
+
+interface SkillEventContext {
+	clientSessionId?: string;
+	requestId?: string;
+	protocolEra: 'legacy' | 'modern';
+	protocolVersion?: string;
+	userHash?: string;
+	isAuthenticated: boolean;
+	clientInfo?: { name: string; version: string };
+}
+
+export function classifySkillRequest(requestBody: unknown): ClassifiedSkillRequest | null {
+	if (typeof requestBody !== 'object' || requestBody === null || Array.isArray(requestBody)) {
+		return null;
+	}
+	const body = requestBody as JsonRpcRequestBody;
+	const cursorSupplied = body.params?.cursor !== undefined;
+
+	if (body.method === SKILLS_LIST_METHOD) {
+		return { methodName: 'skills/list', cursorSupplied };
+	}
+	if (body.method === SKILLS_GET_METHOD) {
+		return { methodName: 'skills/get', cursorSupplied: false };
+	}
+
+	const uri = body.params?.uri;
+	if (typeof uri !== 'string' || !uri.startsWith('skill://')) {
+		return null;
+	}
+	if (body.method === 'resources/read') {
+		return { methodName: 'skills/resource-read', cursorSupplied: false };
+	}
+	if (body.method === RESOURCES_DIRECTORY_READ_METHOD) {
+		return { methodName: 'skills/directory-read', cursorSupplied };
+	}
+	return null;
 }
 
 interface ModernRequestData {
@@ -146,7 +197,22 @@ export function summarizeSubscriptionRequest(method: SubscriptionMethod, params:
 export interface CapturedResponseSummary {
 	isError: boolean;
 	jsonRpcErrorCode?: number;
+	responseItemCount?: number;
 	truncated?: boolean;
+}
+
+function getResponseItemCount(result: unknown): number | undefined {
+	if (typeof result !== 'object' || result === null || Array.isArray(result)) {
+		return undefined;
+	}
+	const record = result as Record<string, unknown>;
+	for (const field of ['skills', 'resources', 'contents']) {
+		const value = record[field];
+		if (Array.isArray(value)) {
+			return value.length;
+		}
+	}
+	return typeof record.skill === 'object' && record.skill !== null ? 1 : undefined;
 }
 
 function inspectResponseBody(body: string): CapturedResponseSummary {
@@ -167,6 +233,7 @@ function inspectResponseBody(body: string): CapturedResponseSummary {
 	const payloads = ssePayloads.length > 0 ? ssePayloads : [body];
 	let isError = false;
 	let jsonRpcErrorCode: number | undefined;
+	let responseItemCount: number | undefined;
 
 	for (const payload of payloads) {
 		try {
@@ -189,6 +256,7 @@ function inspectResponseBody(body: string): CapturedResponseSummary {
 				if (response.result?.isError === true) {
 					isError = true;
 				}
+				responseItemCount ??= getResponseItemCount(response.result);
 			}
 		} catch {
 			// Ignore SSE control events and malformed response fragments.
@@ -197,6 +265,7 @@ function inspectResponseBody(body: string): CapturedResponseSummary {
 	return {
 		isError,
 		...(jsonRpcErrorCode !== undefined ? { jsonRpcErrorCode } : {}),
+		...(responseItemCount !== undefined ? { responseItemCount } : {}),
 	};
 }
 
@@ -286,6 +355,7 @@ export class StatelessHttpTransport extends BaseTransport {
 	private readonly modernRequestStorage = new AsyncLocalStorage<ModernRequestData>();
 	private modernHandler?: McpHttpHandler;
 	private modernNodeHandler?: ReturnType<typeof toNodeHandler>;
+	private readonly skillEventLogger: SkillEventLogger;
 
 	private trackSubscriptionAttempt(
 		method: SubscriptionMethod,
@@ -304,8 +374,9 @@ export class StatelessHttpTransport extends BaseTransport {
 		});
 	}
 
-	constructor(serverFactory: ServerFactory, app: Express) {
+	constructor(serverFactory: ServerFactory, app: Express, skillEventLogger: SkillEventLogger = logSkillEvent) {
 		super(serverFactory, app);
+		this.skillEventLogger = skillEventLogger;
 		this.analyticsMode = process.env.ANALYTICS_MODE === 'true';
 		this.tempLogMax = parseInt(process.env.TEMPLOG_MAX || '0', 10);
 
@@ -317,6 +388,39 @@ export class StatelessHttpTransport extends BaseTransport {
 			logger.info(`Temporary logging available with max count: ${this.tempLogMax}`);
 		}
 	}
+
+	private recordSkillEvent(
+		requestBody: JsonRpcRequestBody | undefined,
+		startTime: number,
+		success: boolean,
+		context: SkillEventContext,
+		responseItemCount?: number
+	): void {
+		const classified = classifySkillRequest(requestBody);
+		if (!classified) return;
+
+		const options: SkillEventLoggerOptions = {
+			clientSessionId: context.clientSessionId,
+			requestId: context.requestId,
+			protocolEra: context.protocolEra,
+			protocolVersion: context.protocolVersion,
+			userHash: context.userHash,
+			isAuthenticated: context.isAuthenticated,
+			clientName: context.clientInfo?.name,
+			clientVersion: context.clientInfo?.version,
+			durationMs: Date.now() - startTime,
+			success,
+			cursorSupplied: classified.cursorSupplied,
+			responseItemCount,
+		};
+
+		try {
+			this.skillEventLogger(classified.methodName, options);
+		} catch (error) {
+			logger.warn({ error, methodName: classified.methodName }, 'Failed to record Skills protocol event');
+		}
+	}
+
 	/**
 	 * Determines if a request should be handled by the full server
 	 * or can be handled by the stub responder
@@ -363,7 +467,8 @@ export class StatelessHttpTransport extends BaseTransport {
 		res: Response,
 		requestBody: JsonRpcRequestBody | undefined,
 		clientInfo: { name: string; version: string } | undefined,
-		startTime: number
+		startTime: number,
+		eventContext: SkillEventContext
 	): Promise<boolean> {
 		const method = requestBody?.method;
 		if (!method || !RESOURCE_METHODS.has(method)) return false;
@@ -410,6 +515,7 @@ export class StatelessHttpTransport extends BaseTransport {
 			if (!content) {
 				res.status(200).json(JsonRpcErrors.invalidParams(`Unknown resource URI: ${uri}`, id));
 				this.trackMethodCall('resources/read', startTime, true, clientInfo);
+				this.recordSkillEvent(requestBody, startTime, false, eventContext);
 				return true;
 			}
 
@@ -421,15 +527,19 @@ export class StatelessHttpTransport extends BaseTransport {
 				},
 			});
 			this.trackMethodCall('resources/read', startTime, false, clientInfo);
+			this.recordSkillEvent(requestBody, startTime, true, eventContext, 1);
 			return true;
 		}
 
 		if (method === RESOURCES_DIRECTORY_READ_METHOD && typeof uri === 'string' && uri.startsWith('skill://')) {
-			const cursor = typeof requestBody?.params?.cursor === 'string' ? requestBody.params.cursor : undefined;
+			const parsedParams = ResourcesDirectoryReadParamsSchema.safeParse(requestBody.params);
+			if (!parsedParams.success) return false;
+			const { cursor } = parsedParams.data;
 			const listing = readSkillDirectory(catalog, uri, cursor);
 			if (!listing) {
 				res.status(200).json(JsonRpcErrors.invalidParams(`Not a directory resource: ${uri}`, id));
 				this.trackMethodCall(RESOURCES_DIRECTORY_READ_METHOD, startTime, true, clientInfo);
+				this.recordSkillEvent(requestBody, startTime, false, eventContext);
 				return true;
 			}
 
@@ -439,6 +549,7 @@ export class StatelessHttpTransport extends BaseTransport {
 				result: listing,
 			});
 			this.trackMethodCall(RESOURCES_DIRECTORY_READ_METHOD, startTime, false, clientInfo);
+			this.recordSkillEvent(requestBody, startTime, true, eventContext, listing.resources.length);
 			return true;
 		}
 
@@ -639,6 +750,13 @@ export class StatelessHttpTransport extends BaseTransport {
 		const authResult = await this.validateAuthAndTrackMetrics(headers);
 		if (!authResult.shouldContinue) {
 			trackServerDiscoverOutcome('authRejected');
+			this.recordSkillEvent(requestBody, startTime, false, {
+				requestId,
+				protocolEra: 'modern',
+				protocolVersion,
+				isAuthenticated: false,
+				clientInfo,
+			});
 			res.set('WWW-Authenticate', buildOAuthResourceHeader(req));
 			res.status(authResult.statusCode || 401).send('Unauthorized');
 			return;
@@ -727,6 +845,20 @@ export class StatelessHttpTransport extends BaseTransport {
 			const responseSummary = responseCapture.summary();
 			const responseIsError = res.statusCode >= 400 || responseSummary.isError || responseSummary.truncated === true;
 			this.trackMethodCall(trackingName, startTime, responseIsError, clientInfo);
+			this.recordSkillEvent(
+				requestBody,
+				startTime,
+				res.statusCode < 400 && !responseSummary.isError,
+				{
+					requestId,
+					protocolEra: 'modern',
+					protocolVersion,
+					userHash,
+					isAuthenticated: authResult.userIdentified,
+					clientInfo,
+				},
+				responseSummary.responseItemCount
+			);
 			trackServerDiscoverOutcome(
 				classifyServerDiscoverOutcome({
 					httpStatus: res.statusCode,
@@ -750,6 +882,14 @@ export class StatelessHttpTransport extends BaseTransport {
 		} catch (error) {
 			trackServerDiscoverOutcome('internalServerError');
 			this.trackMethodCall(trackingName, startTime, true, clientInfo);
+			this.recordSkillEvent(requestBody, startTime, false, {
+				requestId,
+				protocolEra: 'modern',
+				protocolVersion,
+				userHash,
+				isAuthenticated: authResult.userIdentified,
+				clientInfo,
+			});
 			this.trackError(500, error instanceof Error ? error : new Error(String(error)));
 			logger.error({ error, method: trackingName, requestId }, 'Error handling modern MCP request');
 			if (!res.headersSent) {
@@ -783,6 +923,7 @@ export class StatelessHttpTransport extends BaseTransport {
 
 		const trackingName = this.extractMethodForTracking(requestBody);
 		const requestSessionId = headers['mcp-session-id'];
+		sessionId = typeof requestSessionId === 'string' ? requestSessionId : undefined;
 		const existingSession =
 			typeof requestSessionId === 'string' ? this.analyticsSessions.get(requestSessionId) : undefined;
 		const requestedProtocolVersion = requestBody?.params?.protocolVersion;
@@ -821,6 +962,13 @@ export class StatelessHttpTransport extends BaseTransport {
 
 		const authResult = await this.validateAuthAndTrackMetrics(headers);
 		if (!authResult.shouldContinue) {
+			this.recordSkillEvent(requestBody, startTime, false, {
+				clientSessionId: typeof requestSessionId === 'string' ? requestSessionId : undefined,
+				protocolEra: 'legacy',
+				protocolVersion,
+				isAuthenticated: false,
+				clientInfo: existingSession?.clientInfo,
+			});
 			res.set('WWW-Authenticate', buildOAuthResourceHeader(req));
 			res.status(authResult.statusCode || 401).send('Unauthorized');
 			return;
@@ -943,6 +1091,14 @@ export class StatelessHttpTransport extends BaseTransport {
 					}
 
 					logger.debug({ sessionId }, 'Analytics session not found for resumption');
+					this.recordSkillEvent(requestBody, startTime, false, {
+						clientSessionId: sessionId,
+						protocolEra: 'legacy',
+						protocolVersion,
+						userHash,
+						isAuthenticated: authResult.userIdentified,
+						clientInfo: protocolClientInfo,
+					});
 					res.status(404).json(JsonRpcErrors.sessionNotFound(sessionId, extractJsonRpcId(req.body)));
 					return;
 				}
@@ -950,6 +1106,13 @@ export class StatelessHttpTransport extends BaseTransport {
 				// No session ID provided for non-initialize request - return 400
 				this.trackError(400);
 				logger.debug('Missing session ID for non-initialize request in analytics mode');
+				this.recordSkillEvent(requestBody, startTime, false, {
+					protocolEra: 'legacy',
+					protocolVersion,
+					userHash,
+					isAuthenticated: authResult.userIdentified,
+					clientInfo: protocolClientInfo,
+				});
 				res.status(400).json(JsonRpcErrors.invalidRequest(extractJsonRpcId(req.body), 'Session ID required'));
 				return;
 			}
@@ -963,6 +1126,14 @@ export class StatelessHttpTransport extends BaseTransport {
 			const analyticsSession = sessionId ? this.analyticsSessions.get(sessionId) : undefined;
 			const clientInfo = analyticsSession?.clientInfo;
 			this.trackMethodCall(trackingName, startTime, false, clientInfo);
+			this.recordSkillEvent(requestBody, startTime, false, {
+				clientSessionId: sessionId,
+				protocolEra: 'legacy',
+				protocolVersion,
+				userHash,
+				isAuthenticated: analyticsSession?.isAuthenticated ?? authResult.userIdentified,
+				clientInfo: clientInfo ?? protocolClientInfo,
+			});
 			res.status(202).json({ jsonrpc: '2.0', result: null });
 			return;
 		}
@@ -1009,7 +1180,16 @@ export class StatelessHttpTransport extends BaseTransport {
 				this.trackAuthenticatedUser(authResult.authenticatedUser?.name, 'legacy', protocolVersion, clientInfo);
 			}
 
-			if (await this.tryHandleStaticResourceRequest(req, res, requestBody, clientInfo, startTime)) {
+			if (
+				await this.tryHandleStaticResourceRequest(req, res, requestBody, clientInfo, startTime, {
+					clientSessionId: sessionId,
+					protocolEra: 'legacy',
+					protocolVersion,
+					userHash,
+					isAuthenticated: analyticsSession?.isAuthenticated ?? isAuthenticated,
+					clientInfo,
+				})
+			) {
 				return;
 			}
 
@@ -1091,8 +1271,23 @@ export class StatelessHttpTransport extends BaseTransport {
 				res.end = originalEnd;
 			}
 
-			const responseIsError = responseCapture.isError();
+			const responseSummary = responseCapture.summary();
+			const responseIsError = responseSummary.isError;
 			this.trackMethodCall(trackingName, startTime, responseIsError, clientInfo);
+			this.recordSkillEvent(
+				requestBody,
+				startTime,
+				!responseIsError,
+				{
+					clientSessionId: sessionId,
+					protocolEra: 'legacy',
+					protocolVersion,
+					userHash,
+					isAuthenticated: analyticsSession?.isAuthenticated ?? isAuthenticated,
+					clientInfo,
+				},
+				responseSummary.responseItemCount
+			);
 
 			logger.debug(
 				{
@@ -1125,6 +1320,14 @@ export class StatelessHttpTransport extends BaseTransport {
 			const analyticsSession = sessionId ? this.analyticsSessions.get(sessionId) : undefined;
 			const clientInfo = analyticsSession?.clientInfo;
 			this.trackMethodCall(trackingName, startTime, true, clientInfo);
+			this.recordSkillEvent(requestBody, startTime, false, {
+				clientSessionId: sessionId,
+				protocolEra: 'legacy',
+				protocolVersion,
+				userHash,
+				isAuthenticated: analyticsSession?.isAuthenticated ?? authResult.userIdentified,
+				clientInfo: clientInfo ?? protocolClientInfo,
+			});
 
 			this.trackError(500, error instanceof Error ? error : new Error(String(error)));
 

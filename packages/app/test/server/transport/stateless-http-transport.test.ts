@@ -5,6 +5,7 @@ import {
 	MetricsResponseCapture,
 	StatelessHttpTransport,
 	classifyServerDiscoverOutcome,
+	classifySkillRequest,
 	summarizeSubscriptionRequest,
 } from '../../../src/server/transport/stateless-http-transport.js';
 import type { ServerFactory } from '../../../src/server/transport/base-transport.js';
@@ -14,6 +15,8 @@ import { formatMetricsForAPI } from '../../../src/shared/transport-metrics.js';
 import express from 'express';
 import { createProgressRelay } from '../../../src/server/utils/progress-relay.js';
 import { z } from 'zod';
+import * as skillCatalogCache from '../../../src/server/skills/skill-catalog-cache.js';
+import type { SkillCatalog, SkillEntry } from '../../../src/server/skills/skill-types.js';
 
 describe('MetricsResponseCapture', () => {
 	it('detects JSON-RPC and tool errors in bounded responses', () => {
@@ -71,6 +74,33 @@ describe('MetricsResponseCapture', () => {
 		const batch = new MetricsResponseCapture();
 		batch.add('[{"jsonrpc":"2.0","id":1,"result":{}},{"jsonrpc":"2.0","id":2,"error":{"code":-32600}}]');
 		expect(batch.summary()).toEqual({ isError: true, jsonRpcErrorCode: -32600 });
+	});
+
+	it('counts only aggregate Skills response items', () => {
+		const list = new MetricsResponseCapture();
+		list.add(
+			JSON.stringify({
+				jsonrpc: '2.0',
+				id: 1,
+				result: {
+					skills: [
+						{ uri: 'skill://private/one/SKILL.md', frontmatter: { description: 'private' } },
+						{ uri: 'skill://private/two/SKILL.md', frontmatter: { description: 'private' } },
+					],
+				},
+			})
+		);
+		expect(list.summary()).toEqual({ isError: false, responseItemCount: 2 });
+
+		const get = new MetricsResponseCapture();
+		get.add(
+			JSON.stringify({
+				jsonrpc: '2.0',
+				id: 1,
+				result: { skill: { uri: 'skill://private/one/SKILL.md', content: 'private' } },
+			})
+		);
+		expect(get.summary()).toEqual({ isError: false, responseItemCount: 1 });
 	});
 });
 
@@ -256,6 +286,211 @@ describe('StatelessHttpTransport', () => {
 		});
 	});
 
+	describe('Skills event logging', () => {
+		it.each([
+			[
+				{ method: 'skills/list', params: {} },
+				{ methodName: 'skills/list', cursorSupplied: false },
+			],
+			[
+				{ method: 'skills/list', params: { cursor: '' } },
+				{ methodName: 'skills/list', cursorSupplied: true },
+			],
+			[
+				{ method: 'skills/get', params: { uri: 'skill://private/SKILL.md' } },
+				{ methodName: 'skills/get', cursorSupplied: false },
+			],
+			[
+				{ method: 'resources/read', params: { uri: 'skill://private/SKILL.md' } },
+				{ methodName: 'skills/resource-read', cursorSupplied: false },
+			],
+			[
+				{ method: 'resources/directory/read', params: { uri: 'skill://private', cursor: '1' } },
+				{ methodName: 'skills/directory-read', cursorSupplied: true },
+			],
+		])('classifies privacy-sensitive request %j', (request, expected) => {
+			expect(classifySkillRequest(request)).toEqual(expected);
+		});
+
+		it.each([
+			{ method: 'resources/read', params: { uri: 'hf://models/private/repo' } },
+			{ method: 'resources/directory/read', params: { uri: 'hf://models/private' } },
+			{ method: 'resources/read', params: { uri: 42 } },
+			{ method: 'tools/list' },
+			null,
+		])('does not classify non-Skills request %j', (request) => {
+			expect(classifySkillRequest(request)).toBeNull();
+		});
+
+		it('records an allowlisted event and isolates logger failures', () => {
+			const eventLogger = vi.fn();
+			transport = new StatelessHttpTransport(vi.fn() as unknown as ServerFactory, express(), eventLogger);
+			const request = {
+				method: 'skills/get',
+				params: { uri: 'skill://private-org/private-skill/SKILL.md' },
+			};
+
+			(transport as any).recordSkillEvent(
+				request,
+				Date.now() - 10,
+				true,
+				{
+					requestId: 'request-1',
+					protocolEra: 'modern',
+					protocolVersion: '2026-07-28',
+					isAuthenticated: true,
+					clientInfo: { name: 'test-client', version: '1.0.0' },
+				},
+				1
+			);
+
+			expect(eventLogger).toHaveBeenCalledWith(
+				'skills/get',
+				expect.objectContaining({
+					requestId: 'request-1',
+					protocolEra: 'modern',
+					protocolVersion: '2026-07-28',
+					isAuthenticated: true,
+					clientName: 'test-client',
+					clientVersion: '1.0.0',
+					success: true,
+					cursorSupplied: false,
+					responseItemCount: 1,
+				})
+			);
+			expect(JSON.stringify(eventLogger.mock.calls[0])).not.toContain('private-org');
+
+			const failingLogger = vi.fn(() => {
+				throw new Error('logger unavailable');
+			});
+			transport = new StatelessHttpTransport(vi.fn() as unknown as ServerFactory, express(), failingLogger);
+			expect(() =>
+				(transport as any).recordSkillEvent(request, Date.now(), false, {
+					protocolEra: 'legacy',
+					isAuthenticated: false,
+				})
+			).not.toThrow();
+		});
+
+		it('logs successful and failed legacy static resource reads exactly once', async () => {
+			const privateUri = 'skill://private-org/private-skill/SKILL.md';
+			const entry: SkillEntry = {
+				uri: privateUri,
+				skillPath: 'private-org/private-skill',
+				frontmatter: { name: 'private-skill', description: 'PRIVATE_DESCRIPTION' },
+				resources: [{ uri: privateUri, digest: 'digest' }],
+			};
+			const catalog: SkillCatalog = {
+				manifestPath: '/private/skills.json',
+				loadedAt: Date.now(),
+				entries: [entry],
+				entriesByUri: new Map([[privateUri, entry]]),
+				resourcesByUri: new Map([
+					[
+						privateUri,
+						{
+							uri: privateUri,
+							bytes: Buffer.from('PRIVATE_SKILL_CONTENT'),
+							mimeType: 'text/markdown',
+							isText: true,
+							name: 'private-skill',
+							digest: 'digest',
+						},
+					],
+				]),
+				directories: new Map([
+					[
+						'skill://private-org/private-skill',
+						[{ uri: privateUri, name: 'private-skill', mimeType: 'text/markdown' }],
+					],
+				]),
+			};
+			const catalogSpy = vi.spyOn(skillCatalogCache, 'getSkillCatalog').mockResolvedValue(catalog);
+			const eventLogger = vi.fn();
+			transport = new StatelessHttpTransport(vi.fn() as unknown as ServerFactory, express(), eventLogger);
+			const makeResponse = () => ({
+				status: vi.fn().mockReturnThis(),
+				json: vi.fn().mockReturnThis(),
+			});
+			const context = {
+				clientSessionId: 'session-1',
+				protocolEra: 'legacy' as const,
+				protocolVersion: '2026-07-28',
+				isAuthenticated: true,
+				clientInfo: { name: 'skills-client', version: '1.0.0' },
+			};
+
+			try {
+				const successRequest = { method: 'resources/read', params: { uri: privateUri } };
+				const successResponse = makeResponse();
+				await expect(
+					(transport as any).tryHandleStaticResourceRequest(
+						{ headers: {}, body: successRequest },
+						successResponse,
+						successRequest,
+						context.clientInfo,
+						Date.now(),
+						context
+					)
+				).resolves.toBe(true);
+
+				const failedRequest = {
+					method: 'resources/read',
+					params: { uri: 'skill://private-org/missing/SKILL.md' },
+				};
+				const failedResponse = makeResponse();
+				await expect(
+					(transport as any).tryHandleStaticResourceRequest(
+						{ headers: {}, body: failedRequest },
+						failedResponse,
+						failedRequest,
+						context.clientInfo,
+						Date.now(),
+						context
+					)
+				).resolves.toBe(true);
+
+				const directoryRequest = {
+					method: 'resources/directory/read',
+					params: { uri: 'skill://private-org/private-skill', cursor: '0' },
+				};
+				const directoryResponse = makeResponse();
+				await expect(
+					(transport as any).tryHandleStaticResourceRequest(
+						{ headers: {}, body: directoryRequest },
+						directoryResponse,
+						directoryRequest,
+						context.clientInfo,
+						Date.now(),
+						context
+					)
+				).resolves.toBe(true);
+
+				expect(eventLogger).toHaveBeenCalledTimes(3);
+				expect(eventLogger.mock.calls[0]).toEqual([
+					'skills/resource-read',
+					expect.objectContaining({ success: true, responseItemCount: 1 }),
+				]);
+				expect(eventLogger.mock.calls[1]).toEqual([
+					'skills/resource-read',
+					expect.objectContaining({ success: false, responseItemCount: undefined }),
+				]);
+				expect(eventLogger.mock.calls[2]).toEqual([
+					'skills/directory-read',
+					expect.objectContaining({
+						success: true,
+						cursorSupplied: true,
+						responseItemCount: 1,
+					}),
+				]);
+				expect(JSON.stringify(eventLogger.mock.calls)).not.toContain('private-org');
+				expect(JSON.stringify(eventLogger.mock.calls)).not.toContain('PRIVATE_');
+			} finally {
+				catalogSpy.mockRestore();
+			}
+		});
+	});
+
 	describe('skipGradioSetup', () => {
 		it('should discover Gradio apps for resource requests', () => {
 			expect((transport as any).skipGradioSetup({ method: 'resources/list' })).toBe(false);
@@ -391,6 +626,143 @@ describe('StatelessHttpTransport', () => {
 	});
 
 	describe('production request path', () => {
+		it('logs a modern skills/list probe exactly once without retaining its response', async () => {
+			const app = express();
+			app.use(express.json());
+			const eventLogger = vi.fn();
+			const serverFactory: ServerFactory = vi.fn(async () => {
+				const server = new McpServer({ name: 'skills-logging-test', version: '1.0.0' });
+				server.server.setRequestHandler(
+					'skills/list',
+					{ params: z.looseObject({ cursor: z.string().optional() }) },
+					() => ({
+						skills: [
+							{ uri: 'skill://private/one/SKILL.md', frontmatter: { description: 'PRIVATE_ONE' } },
+							{ uri: 'skill://private/two/SKILL.md', frontmatter: { description: 'PRIVATE_TWO' } },
+						],
+					})
+				);
+				return { server, enabledToolIds: [] };
+			});
+			transport = new StatelessHttpTransport(serverFactory, app, eventLogger);
+			await transport.initialize();
+
+			const httpServer = app.listen(0);
+			try {
+				await new Promise<void>((resolve, reject) => {
+					httpServer.once('listening', resolve);
+					httpServer.once('error', reject);
+				});
+				const address = httpServer.address();
+				if (!address || typeof address === 'string') {
+					throw new Error('Expected the test server to listen on a TCP port');
+				}
+
+				const client = new Client(
+					{ name: 'skills-client', version: '1.0.0' },
+					{ versionNegotiation: { mode: { pin: '2026-07-28' } } }
+				);
+				const clientTransport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${address.port}/mcp`));
+				await client.connect(clientTransport);
+				await client.request({ method: 'skills/list', params: {} }, z.looseObject({ skills: z.array(z.unknown()) }));
+
+				expect(eventLogger).toHaveBeenCalledTimes(1);
+				expect(eventLogger).toHaveBeenCalledWith(
+					'skills/list',
+					expect.objectContaining({
+						protocolEra: 'modern',
+						protocolVersion: '2026-07-28',
+						clientName: 'skills-client',
+						clientVersion: '1.0.0',
+						success: true,
+						cursorSupplied: false,
+						responseItemCount: 2,
+					})
+				);
+				const serializedEvent = JSON.stringify(eventLogger.mock.calls[0]);
+				expect(serializedEvent).not.toContain('skill://');
+				expect(serializedEvent).not.toContain('PRIVATE_');
+
+				await client.close();
+			} finally {
+				await new Promise<void>((resolve, reject) => {
+					httpServer.close((error) => (error ? reject(error) : resolve()));
+				});
+				await transport.cleanup();
+			}
+		});
+
+		it('logs a legacy full-server skills/list probe exactly once', async () => {
+			delete process.env.ANALYTICS_MODE;
+			const app = express();
+			app.use(express.json());
+			const eventLogger = vi.fn();
+			const serverFactory: ServerFactory = vi.fn(async () => {
+				const server = new McpServer({ name: 'legacy-skills-logging-test', version: '1.0.0' });
+				server.server.setRequestHandler(
+					'skills/list',
+					{ params: z.looseObject({ cursor: z.string().optional() }) },
+					() => ({
+						skills: [{ uri: 'skill://private/legacy/SKILL.md', frontmatter: { description: 'PRIVATE_LEGACY' } }],
+					})
+				);
+				return { server, enabledToolIds: [] };
+			});
+			transport = new StatelessHttpTransport(serverFactory, app, eventLogger);
+			await transport.initialize();
+
+			const httpServer = app.listen(0);
+			try {
+				await new Promise<void>((resolve, reject) => {
+					httpServer.once('listening', resolve);
+					httpServer.once('error', reject);
+				});
+				const address = httpServer.address();
+				if (!address || typeof address === 'string') {
+					throw new Error('Expected the test server to listen on a TCP port');
+				}
+
+				const response = await fetch(`http://127.0.0.1:${address.port}/mcp`, {
+					method: 'POST',
+					headers: {
+						accept: 'application/json, text/event-stream',
+						'content-type': 'application/json',
+						'mcp-protocol-version': '2025-03-26',
+						'mcp-session-id': 'legacy-session-1',
+					},
+					body: JSON.stringify({
+						jsonrpc: '2.0',
+						id: 1,
+						method: 'skills/list',
+						params: {},
+					}),
+				});
+				expect(response.status).toBe(200);
+				expect(await response.json()).toMatchObject({ result: { skills: [expect.any(Object)] } });
+
+				expect(eventLogger).toHaveBeenCalledTimes(1);
+				expect(eventLogger).toHaveBeenCalledWith(
+					'skills/list',
+					expect.objectContaining({
+						protocolEra: 'legacy',
+						protocolVersion: '2025-03-26',
+						clientSessionId: 'legacy-session-1',
+						success: true,
+						cursorSupplied: false,
+						responseItemCount: 1,
+					})
+				);
+				const serializedEvent = JSON.stringify(eventLogger.mock.calls[0]);
+				expect(serializedEvent).not.toContain('skill://');
+				expect(serializedEvent).not.toContain('PRIVATE_');
+			} finally {
+				await new Promise<void>((resolve, reject) => {
+					httpServer.close((error) => (error ? reject(error) : resolve()));
+				});
+				await transport.cleanup();
+			}
+		});
+
 		it('rejects modern subscription listeners through the configured SDK limit', async () => {
 			const app = express();
 			app.use(express.json());
