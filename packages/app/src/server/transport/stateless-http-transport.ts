@@ -84,6 +84,7 @@ interface JsonRpcRequestBody {
 export interface ClassifiedSkillRequest {
 	methodName: SkillEventName;
 	cursorSupplied: boolean;
+	targetUri?: string;
 }
 
 interface SkillEventContext {
@@ -107,7 +108,11 @@ export function classifySkillRequest(requestBody: unknown): ClassifiedSkillReque
 		return { methodName: 'skills/list', cursorSupplied };
 	}
 	if (body.method === SKILLS_GET_METHOD) {
-		return { methodName: 'skills/get', cursorSupplied: false };
+		return {
+			methodName: 'skills/get',
+			cursorSupplied: false,
+			...(typeof body.params?.uri === 'string' ? { targetUri: body.params.uri } : {}),
+		};
 	}
 
 	const uri = body.params?.uri;
@@ -115,10 +120,10 @@ export function classifySkillRequest(requestBody: unknown): ClassifiedSkillReque
 		return null;
 	}
 	if (body.method === 'resources/read') {
-		return { methodName: 'skills/resource-read', cursorSupplied: false };
+		return { methodName: 'skills/resource-read', cursorSupplied: false, targetUri: uri };
 	}
 	if (body.method === RESOURCES_DIRECTORY_READ_METHOD) {
-		return { methodName: 'skills/directory-read', cursorSupplied };
+		return { methodName: 'skills/directory-read', cursorSupplied, targetUri: uri };
 	}
 	return null;
 }
@@ -411,6 +416,7 @@ export class StatelessHttpTransport extends BaseTransport {
 			durationMs: Date.now() - startTime,
 			success,
 			cursorSupplied: classified.cursorSupplied,
+			targetUri: classified.targetUri,
 			responseItemCount,
 		};
 

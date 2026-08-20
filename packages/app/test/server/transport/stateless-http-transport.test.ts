@@ -298,15 +298,19 @@ describe('StatelessHttpTransport', () => {
 			],
 			[
 				{ method: 'skills/get', params: { uri: 'skill://private/SKILL.md' } },
-				{ methodName: 'skills/get', cursorSupplied: false },
+				{ methodName: 'skills/get', cursorSupplied: false, targetUri: 'skill://private/SKILL.md' },
 			],
 			[
 				{ method: 'resources/read', params: { uri: 'skill://private/SKILL.md' } },
-				{ methodName: 'skills/resource-read', cursorSupplied: false },
+				{
+					methodName: 'skills/resource-read',
+					cursorSupplied: false,
+					targetUri: 'skill://private/SKILL.md',
+				},
 			],
 			[
 				{ method: 'resources/directory/read', params: { uri: 'skill://private', cursor: '1' } },
-				{ methodName: 'skills/directory-read', cursorSupplied: true },
+				{ methodName: 'skills/directory-read', cursorSupplied: true, targetUri: 'skill://private' },
 			],
 		])('classifies privacy-sensitive request %j', (request, expected) => {
 			expect(classifySkillRequest(request)).toEqual(expected);
@@ -355,10 +359,11 @@ describe('StatelessHttpTransport', () => {
 					clientVersion: '1.0.0',
 					success: true,
 					cursorSupplied: false,
+					targetUri: 'skill://private-org/private-skill/SKILL.md',
 					responseItemCount: 1,
 				})
 			);
-			expect(JSON.stringify(eventLogger.mock.calls[0])).not.toContain('private-org');
+			expect(JSON.stringify(eventLogger.mock.calls[0])).toContain('skill://private-org/private-skill/SKILL.md');
 
 			const failingLogger = vi.fn(() => {
 				throw new Error('logger unavailable');
@@ -469,21 +474,25 @@ describe('StatelessHttpTransport', () => {
 				expect(eventLogger).toHaveBeenCalledTimes(3);
 				expect(eventLogger.mock.calls[0]).toEqual([
 					'skills/resource-read',
-					expect.objectContaining({ success: true, responseItemCount: 1 }),
+					expect.objectContaining({ success: true, targetUri: privateUri, responseItemCount: 1 }),
 				]);
 				expect(eventLogger.mock.calls[1]).toEqual([
 					'skills/resource-read',
-					expect.objectContaining({ success: false, responseItemCount: undefined }),
+					expect.objectContaining({
+						success: false,
+						targetUri: 'skill://private-org/missing/SKILL.md',
+						responseItemCount: undefined,
+					}),
 				]);
 				expect(eventLogger.mock.calls[2]).toEqual([
 					'skills/directory-read',
 					expect.objectContaining({
 						success: true,
 						cursorSupplied: true,
+						targetUri: 'skill://private-org/private-skill',
 						responseItemCount: 1,
 					}),
 				]);
-				expect(JSON.stringify(eventLogger.mock.calls)).not.toContain('private-org');
 				expect(JSON.stringify(eventLogger.mock.calls)).not.toContain('PRIVATE_');
 			} finally {
 				catalogSpy.mockRestore();

@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { buildSkillLogEntry, type SkillEventLoggerOptions } from '../../../src/server/utils/skill-event-logger.js';
 
 describe('buildSkillLogEntry', () => {
-	it('emits only allowlisted, privacy-preserving Skills telemetry', () => {
-		const privateValues = {
-			uri: 'skill://private-org/private-skill/SKILL.md',
+	it('retains the requested target while excluding other request and response data', () => {
+		const targetUri = 'skill://private-org/private-skill/SKILL.md';
+		const excludedValues = {
 			cursor: 'private-cursor',
 			content: 'PRIVATE_SKILL_CONTENT',
 			errorMessage: 'Unknown skill URI: skill://private-org/private-skill/SKILL.md',
@@ -21,11 +21,12 @@ describe('buildSkillLogEntry', () => {
 			durationMs: 12.6,
 			success: true,
 			cursorSupplied: true,
+			targetUri,
 			responseItemCount: 2,
-			...privateValues,
-		} satisfies SkillEventLoggerOptions & typeof privateValues;
+			...excludedValues,
+		} satisfies SkillEventLoggerOptions & typeof excludedValues;
 
-		const entry = buildSkillLogEntry('skills/list', options);
+		const entry = buildSkillLogEntry('skills/get', options);
 
 		expect(entry).toMatchObject({
 			clientSessionId: 'session-1',
@@ -35,11 +36,12 @@ describe('buildSkillLogEntry', () => {
 			userHash: 'user-hash',
 			name: 'test-client',
 			version: '1.2.3',
-			methodName: 'skills/list',
+			methodName: 'skills/get',
 			authorized: true,
 			durationMs: 13,
 			success: true,
 			cursorSupplied: true,
+			targetUri,
 			responseItemCount: 2,
 		});
 		expect(Object.keys(entry).sort()).toEqual(
@@ -58,14 +60,16 @@ describe('buildSkillLogEntry', () => {
 				'serverBuildSha',
 				'serverVersion',
 				'success',
+				'targetUri',
 				'userHash',
 				'version',
 			].sort()
 		);
 
 		const serialized = JSON.stringify(entry);
-		for (const privateValue of Object.values(privateValues)) {
-			expect(serialized).not.toContain(privateValue);
+		expect(serialized).toContain(targetUri);
+		for (const excludedValue of Object.values(excludedValues)) {
+			expect(serialized).not.toContain(excludedValue);
 		}
 	});
 
@@ -80,6 +84,7 @@ describe('buildSkillLogEntry', () => {
 		});
 
 		expect(entry.durationMs).toBe(0);
+		expect(entry.targetUri).toBeNull();
 		expect(entry.responseItemCount).toBeNull();
 	});
 });

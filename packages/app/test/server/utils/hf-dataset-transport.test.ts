@@ -118,7 +118,8 @@ describe('HfDatasetLogger', () => {
 				pid: 123,
 				hostname: 'test-host',
 				msg: 'Skill event logged',
-				methodName: 'skills/list',
+				methodName: 'skills/get',
+				targetUri: 'skill://huggingface/example/SKILL.md',
 				success: true,
 			});
 
@@ -129,7 +130,11 @@ describe('HfDatasetLogger', () => {
 			};
 			expect(upload.file.path).toMatch(/^skills\/\d{4}-\d{2}-\d{2}\/logs-/u);
 			const uploaded = JSON.parse(await upload.file.content.text()) as Record<string, unknown>;
-			expect(uploaded).toMatchObject({ methodName: 'skills/list', success: true });
+			expect(uploaded).toMatchObject({
+				methodName: 'skills/get',
+				targetUri: 'skill://huggingface/example/SKILL.md',
+				success: true,
+			});
 			expect(uploaded).not.toHaveProperty('level');
 			expect(uploaded).not.toHaveProperty('pid');
 			expect(uploaded).not.toHaveProperty('hostname');

@@ -18,6 +18,7 @@ export interface SkillEventLoggerOptions {
 	durationMs: number;
 	success: boolean;
 	cursorSupplied: boolean;
+	targetUri?: string;
 	responseItemCount?: number;
 }
 
@@ -37,6 +38,7 @@ export interface SkillLogEntry {
 	durationMs: number;
 	success: boolean;
 	cursorSupplied: boolean;
+	targetUri: string | null;
 	responseItemCount: number | null;
 }
 
@@ -85,8 +87,9 @@ function createSkillLogger(): Logger | null {
 const skillLogger = createSkillLogger();
 
 /**
- * Build an allowlisted event row. Request parameters, resource identifiers,
- * response bodies, and error messages are deliberately not accepted.
+ * Build an allowlisted event row. The targeted skill/resource URI is retained
+ * for product usage analysis; cursor values, response bodies, frontmatter,
+ * content, and error messages are deliberately not accepted.
  */
 export function buildSkillLogEntry(methodName: SkillEventName, options: SkillEventLoggerOptions): SkillLogEntry {
 	const responseItemCount =
@@ -112,6 +115,7 @@ export function buildSkillLogEntry(methodName: SkillEventName, options: SkillEve
 		durationMs: Math.max(0, Math.round(options.durationMs)),
 		success: options.success,
 		cursorSupplied: options.cursorSupplied,
+		targetUri: options.targetUri ?? null,
 		responseItemCount,
 	};
 }
