@@ -3,6 +3,8 @@ import { parseCommandArgs, type CommandOptionMap } from './command-args.js';
 
 export const HF_FS_OPERATIONS = ['ls', 'cat', 'attach', 'stat', 'find', 'search'] as const;
 export const HF_FS_ENTRY_TYPES = ['file', 'dir', 'repo', 'bucket', 'collection', 'paper', 'link'] as const;
+export const HF_FS_ATTACH_MAX_BYTES = 8 * 1024 * 1024;
+export const HF_FS_BATCH_MAX_OPERATIONS = 30;
 const HF_FS_SEARCH_SORTS = [
 	'createdAt',
 	'downloads',
@@ -37,48 +39,48 @@ export interface HfFsParams {
 	limit?: number;
 }
 
-export const HF_FS_DESCRIPTION = `Use to access the Hugging Face Hub. Navigate resources with ls, cat, attach, find, stat, and search over hf:// URIs. Roots: hf://models, hf://datasets, hf://spaces, hf://buckets, hf://collections, hf://papers, hf://docs. For papers, ls hf://papers/ARXIV_ID to discover related resources; cat hf://papers/ARXIV_ID/paper.md or metadata.json. Documentation paths include the current version from each product's llms.txt manifest.
+export const HF_FS_DESCRIPTION = `Use hf_fs for Hugging Face Hub filesystem operations. Call it with operations, an array of {cmd, args} items; multiple operations may be submitted together.
 
-Grammar; each token below is one args array element:
-  ls     URI [(-R|-r|-lR|-laR|--recursive)] [(-l|-a|-la|-al|--long)] [--glob GLOB]
-             [(-type|--type|--entry-type) TYPE] [--sort SORT] [(-limit|--limit) N]
-  cat    URI [RELATIVE_PATH] [(-offset|--offset) N] [(-max-bytes|--max-bytes) N]
+Usage:
+  {"operations":[{"cmd":"ls","args":["hf://models/org/repo"]}]}
+
+Grammar; each string below is one args array item:
+  ls     URI [--recursive] [--glob GLOB] [--type TYPE] [--sort SORT] [--limit N]
+  cat    URI [--offset N] [--max-bytes N]
   attach URI [--max-bytes N]
-  stat   URI [RELATIVE_PATH]
-  find   URI [(-R|-r|--recursive)] [(-name|--name|--glob) GLOB] [(-path|--path) GLOB]
-             [(-type|--type|--entry-type) TYPE] [(-limit|--limit) N]
-  search URI [QUERY...] [(-type|--type|--entry-type) TYPE] [--sort SORT]
-                        [--tag TAG] [--kind mcp] [(-limit|--limit) N]
+  stat   URI
+  find   URI [--name GLOB] [--path GLOB] [--type TYPE] [--limit N]
+  search URI [QUERY] [--type TYPE] [--sort SORT] [--tag TAG] [--kind mcp] [--limit N]
 
+COMMAND = ls|cat|attach|stat|find|search.
 TYPE = file|dir|repo|bucket|collection|paper|link.
-Type aliases: f=file, d=dir, l=link, model|dataset|space=repo.
 SORT = createdAt|downloads|likes|lastModified|likes30d|trendingScore|mainSize|id|trending|upvotes.
-URI uses hf://, a typed shorthand such as models/OWNER/REPO, or a canonical https://huggingface.co URL. QUERY and GLOB are each one string token.
-Search URI: hf://models|datasets|spaces[/OWNER], hf://collections[/OWNER], any hf://docs scope, or exactly hf://papers; not hf://.
-Repository and collection searches may omit QUERY to browse or filter; documentation and paper searches require it.
-Search joins multiple positional QUERY tokens with spaces. Cat and stat join one RELATIVE_PATH token to URI. Attach accepts exactly one complete URI and no RELATIVE_PATH or offset.
-Discover before access: use search, ls, or find to locate targets; use stat when target type is uncertain; then reuse the returned URI, or the Target URI for links, verbatim.
-Cat reads confirmed UTF-8 text files only. It rejects repositories, directories, model weights, archives, images, media, Parquet, and other binary content. Use stat for metadata instead.
-Attach returns a complete JPEG, PNG, or WebP repository or bucket file as image content. It classifies only by file extension, never truncates, and has a default and hard limit of 4 MiB; --max-bytes may only lower it.
-Find recursively matches names and paths within an owner namespace, repository, or supported documentation scope. Use search—not an unscoped find—for global repository, collection, documentation, paper, or Space discovery.
-Long-list flags are accepted for compatibility; hf_fs listings are already structured, so they do not alter output.
-Find is already recursive, so recursive flags are accepted without altering behavior.
-Space search: hf://spaces uses semantic search; repeat --tag to require tags, or use --kind mcp for --tag mcp-server. hf://spaces/OWNER uses owner-scoped keyword search.
-Documentation: ls hf://docs for products; search any docs scope; use returned hf:// URIs verbatim.
-Trending listings: ls hf://models/trending, hf://datasets/trending, or hf://spaces/trending. They return up to 20 entries.
-Trending paths imply trending order; --sort trending|trendingScore is redundant but valid.
-Trending papers: ls hf://papers/trending.
-Sort is route-specific: use it with search or supported owner/collection listings, never with repository file listings or documentation. For global trending repositories, use the /trending listing URI.
-TYPE filters mixed results; omit it when the URI already fixes the result type.
-Limits and path-specific behavior are documented at hf://README.md.
-Omit --limit and --sort unless the request asks for a cap, ordering, or exhaustive results.
-No pipes, redirects, shell expansion, or multiple commands.`;
+URI is a canonical hf:// URI. QUERY and GLOB are each one string.
 
-export const HF_FS_SCHEMA = z.object({
-	cmd: z.enum(HF_FS_OPERATIONS).describe('Command to execute.'),
-	args: z.array(z.string()).describe('Command arguments; each array item is one grammar token.'),
-});
+Use search for discovery, ls for a known directory, find for recursive matching within a known scope, stat for filesystem metadata or an uncertain target type, cat for text contents, and attach for a complete JPEG, PNG, or WebP image. When the request gives an exact text-file URI, use cat directly; do not add ls or stat first. stat does not read the contents of JSON, Markdown, or other text files.
 
+Search scopes: hf://models|datasets|spaces[/OWNER], hf://collections[/OWNER], hf://papers, and hf://docs[/...]. Paper and documentation search require QUERY. Repeat --tag only for search hf://spaces; --kind mcp selects MCP Spaces.
+Use ls hf://models/trending, hf://datasets/trending, hf://spaces/trending, or hf://papers/trending for trending listings.
+For a named paper.md or metadata.json, use cat directly. Use ls on a paper only to discover an unnamed related resource.
+Omit --limit, --sort, and --type unless the request requires them. Limits and path-specific behavior are documented at hf://README.md. Issue one hf_fs call.`;
+
+export const HF_FS_OPERATION_SCHEMA = z
+	.object({
+		cmd: z.enum(HF_FS_OPERATIONS).describe('Command to execute.'),
+		args: z.array(z.string()).describe('Command arguments; each array item is one grammar token.'),
+	})
+	.strict();
+
+export const HF_FS_SCHEMA = z
+	.object({
+		operations: z
+			.array(HF_FS_OPERATION_SCHEMA)
+			.min(1, 'Provide at least one operation')
+			.max(HF_FS_BATCH_MAX_OPERATIONS, `Provide at most ${HF_FS_BATCH_MAX_OPERATIONS.toString()} operations`),
+	})
+	.strict();
+
+export type HfFsOperationRequest = z.input<typeof HF_FS_OPERATION_SCHEMA>;
 export type HfFsRequest = z.input<typeof HF_FS_SCHEMA>;
 
 interface ParsedHfFsRequest {
@@ -163,7 +165,7 @@ const FLAGS: Readonly<Record<HfFsOperation, CommandOptionMap>> = {
 	search: SEARCH_FLAGS,
 };
 
-export function parseHfFsRequest(request: HfFsRequest): ParsedHfFsRequest {
+export function parseHfFsRequest(request: HfFsOperationRequest): ParsedHfFsRequest {
 	const { positionals, options } = parseCommandArgs(request, FLAGS[request.cmd]);
 	if (positionals.length === 0) {
 		throw new Error(`EINVAL: ${request.cmd} requires an hf:// URI`);
@@ -359,12 +361,12 @@ function validateParsedParams(params: HfFsParams): void {
 	if (
 		params.max_bytes !== undefined &&
 		(params.op === 'attach'
-			? params.max_bytes < 1 || params.max_bytes > 4 * 1024 * 1024
+			? params.max_bytes < 1 || params.max_bytes > HF_FS_ATTACH_MAX_BYTES
 			: params.max_bytes < 0 || params.max_bytes > 80_000)
 	) {
 		throw new Error(
 			params.op === 'attach'
-				? 'EINVAL: attach max_bytes must be between 1 and 4194304'
+				? `EINVAL: attach max_bytes must be between 1 and ${HF_FS_ATTACH_MAX_BYTES.toString()}`
 				: 'EINVAL: max_bytes must be between 0 and 80000'
 		);
 	}

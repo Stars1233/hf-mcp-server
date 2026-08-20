@@ -19,6 +19,9 @@ The `hf_fs` tool supports six operations:
 - `find` traverses descendants beneath one known resource.
 - `search` performs API-backed discovery beneath a supported discovery root.
 
+Calls use an `operations` array. One call may submit up to 30 operations, which the server executes with bounded
+parallelism while preserving input order in the returned results.
+
 Use `search` for global discovery and `find` for local traversal. Global recursive crawling is intentionally unsupported.
 
 Entries use canonical `hf://` identities. A link has a local `uri` and an authoritative `target_uri`. Directly addressing a supported link resolves to its target, while recursive traversal does not follow links.
@@ -59,10 +62,12 @@ truncation.
 | `ls hf://models/trending` | 20 | 20 |
 | `ls hf://datasets/trending` | 20 | 20 |
 | `ls hf://spaces/trending` | 20 | 20 |
+| `ls hf://papers/trending` | 20 | 100 |
 | `cat --max-bytes` | 20,000 bytes | 80,000 bytes |
-| `attach --max-bytes` | 4 MiB | 4 MiB |
+| `attach --max-bytes` | 8 MiB | 8 MiB |
+| Operations per call | 1 | 30 |
 
-Paper listings have provider-specific limits, generally 100 entries. Use `--limit` only when the request calls for a cap or exhaustive results.
+Paper listings preserve their provider-defined order. `hf://papers/trending` uses Hugging Face global trending rank, returns 20 papers by default, and accepts `--limit` up to 100. A truncated result states when more papers are available. The cumulative attachment payload for one call is limited to 8 MiB. In a batch, attachment admission is best-effort: the first attachments to reserve capacity are returned, and each attachment omitted because the shared budget is exhausted receives an `HF_FS_ATTACHMENT_BUDGET_EXCEEDED` error result. Split attachments across separate calls when deterministic inclusion is required.
 
 ## Examples
 
@@ -81,7 +86,18 @@ search hf://docs/transformers "loading a pretrained model"
 The MCP input keeps each token separate. For example:
 
 ```json
-{"cmd":"find","args":["hf://spaces/OWNER/NAME","--name","app.py","--type","file"]}
+{"operations":[{"cmd":"find","args":["hf://spaces/OWNER/NAME","--name","app.py","--type","file"]}]}
+```
+
+Multiple operations can be submitted together:
+
+```json
+{
+  "operations": [
+    {"cmd":"cat","args":["hf://papers/2502.16161/metadata.json"]},
+    {"cmd":"cat","args":["hf://papers/2502.16162/metadata.json"]}
+  ]
+}
 ```
 
 ## Writes

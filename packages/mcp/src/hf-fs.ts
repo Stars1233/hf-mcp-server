@@ -43,6 +43,8 @@ import { catGuidance, isRootGuidanceUri, statGuidance } from './hf-fs-guidance.j
 import { HfFsPaperProvider, isPaperUri, paperListingOrder } from './hf-fs-papers.js';
 import { HfFsDocsProvider, isDocsUri } from './hf-fs-docs.js';
 import {
+	HF_FS_ATTACH_MAX_BYTES,
+	HF_FS_BATCH_MAX_OPERATIONS,
 	HF_FS_DESCRIPTION,
 	HF_FS_ENTRY_TYPES,
 	HF_FS_OPERATIONS,
@@ -50,15 +52,21 @@ import {
 	isRepoTrendingUri,
 	parseHfFsRequest,
 	type HfFsEntryType,
+	type HfFsOperationRequest,
 	type HfFsParams,
 	type HfFsRequest,
 	type HfFsSort,
 } from './hf-fs-contract.js';
 import {
+	HfFsAttachmentBudgetExceededError,
 	HfFsAttachmentIntegrityError,
+	HfFsImageContentDisabledError,
 	HfFsImageOnlyError,
 	HfFsImageTooLargeError,
 	HfFsUnsupportedMediaError,
+	classifyHfFsError,
+	formatHfFsRecoveryError,
+	type HfFsRecoveryError,
 } from './hf-fs-errors.js';
 
 const HF_FS_STAT_TYPES = ['namespace', 'repo', 'dir', 'file', 'collection', 'paper', 'link', 'missing'] as const;
@@ -72,39 +80,19 @@ const DEFAULT_SEARCH_LIMIT = 100;
 const MAX_SEARCH_LIMIT = 1000;
 const DEFAULT_TRENDING_LIMIT = 20;
 const DEFAULT_CAT_MAX_BYTES = 20_000;
-export const HF_FS_ATTACH_MAX_BYTES = 8 * 1024 * 1024;
 const APPROX_CHARS_PER_TOKEN = 4;
 const MAX_UTF8_SEQUENCE_BYTES = 4;
 export const HF_FS_MAX_OUTPUT_TOKENS = 20_000;
 export const HF_FS_MAX_OUTPUT_CHARS = maxCharsForTokenBudget(HF_FS_MAX_OUTPUT_TOKENS, APPROX_CHARS_PER_TOKEN);
+export const HF_FS_BATCH_CONCURRENCY = 4;
 const MAX_CAT_BYTES = HF_FS_MAX_OUTPUT_CHARS;
 
 export const HF_FILES_FLAG = 'hf_files' as const;
 
-export const HF_FS_TOOL_CONFIG = {
-	name: 'hf_fs',
-	// human discovery
-	title:
-		'Hugging Face Hub: Find, use and view models, datasets, spaces, buckets, papers, documentation and collections. ' +
-		'Get daily papers reports, and browse trending content. ',
-	// model discovery
-	description: HF_FS_DESCRIPTION,
-	schema: HF_FS_SCHEMA,
-	outputSchema: createHfFsOutputSchema(),
-	annotations: {
-		title:
-			'Hugging Face Hub: Find, use and view models, datasets, spaces, buckets, papers, documentation and collections. ' +
-			'Get daily papers reports, and browse trending content. ',
-		destructiveHint: false,
-		idempotentHint: false,
-		readOnlyHint: true,
-		openWorldHint: true,
-	},
-} as const;
+export type { HfFsEntryType, HfFsOperation, HfFsOperationRequest, HfFsParams, HfFsRequest } from './hf-fs-contract.js';
+export { HF_FS_ATTACH_MAX_BYTES, HF_FS_BATCH_MAX_OPERATIONS } from './hf-fs-contract.js';
 
-export type { HfFsEntryType, HfFsOperation, HfFsParams, HfFsRequest } from './hf-fs-contract.js';
-
-function createHfFsOutputSchema() {
+function createHfFsResultOutputSchema() {
 	const imageMimeTypeSchema = z.enum(['image/jpeg', 'image/png', 'image/webp']);
 	const attachmentBytesSchema = z.number().int().min(0).max(HF_FS_ATTACH_MAX_BYTES);
 	const entrySchema = z.object({
@@ -208,6 +196,79 @@ function createHfFsOutputSchema() {
 			],
 		});
 }
+
+const HF_FS_RESULT_OUTPUT_SCHEMA = createHfFsResultOutputSchema();
+const HF_FS_RECOVERY_ERROR_OUTPUT_SCHEMA = z
+	.object({
+		code: z.enum([
+			'HF_FS_INVALID_ARGUMENT',
+			'HF_FS_NOT_FOUND',
+			'HF_FS_NOT_A_DIRECTORY',
+			'HF_FS_NOT_A_FILE',
+			'HF_FS_UNSUPPORTED_OPERATION',
+			'HF_FS_TEXT_ONLY',
+			'HF_FS_IMAGE_ONLY',
+			'HF_FS_UNSUPPORTED_MEDIA',
+			'HF_FS_IMAGE_TOO_LARGE',
+			'HF_FS_ATTACHMENT_BUDGET_EXCEEDED',
+			'HF_FS_IMAGE_CONTENT_DISABLED',
+			'HF_FS_ATTACHMENT_INTEGRITY',
+		]),
+		message: z.string(),
+		recovery: z.string(),
+		retryable: z.literal(false),
+		suggestedOperation: z.enum(['ls', 'cat', 'attach', 'stat', 'search']).optional(),
+	})
+	.strict();
+const HF_FS_BATCH_ITEM_OUTPUT_SCHEMA = z.discriminatedUnion('status', [
+	z
+		.object({
+			index: z.number().int().nonnegative(),
+			status: z.literal('success'),
+			result: HF_FS_RESULT_OUTPUT_SCHEMA,
+			output_truncated: z.boolean().optional(),
+		})
+		.strict(),
+	z
+		.object({
+			index: z.number().int().nonnegative(),
+			status: z.literal('error'),
+			error: HF_FS_RECOVERY_ERROR_OUTPUT_SCHEMA,
+		})
+		.strict(),
+]);
+const HF_FS_BATCH_OUTPUT_SCHEMA = z
+	.object({
+		results: z.array(HF_FS_BATCH_ITEM_OUTPUT_SCHEMA).min(1).max(HF_FS_BATCH_MAX_OPERATIONS),
+		truncated: z.boolean().optional(),
+		truncation_reason: z.literal('output_budget').optional(),
+	})
+	.strict();
+
+export const HF_FS_TOOL_CONFIG = {
+	name: 'hf_fs',
+	// human discovery
+	title:
+		'Hugging Face Hub: Find, use and view models, datasets, spaces, buckets, papers, documentation and collections. ' +
+		'Get daily papers reports, and browse trending content. ',
+	// model discovery
+	description: HF_FS_DESCRIPTION,
+	schema: HF_FS_SCHEMA,
+	outputSchema: HF_FS_BATCH_OUTPUT_SCHEMA,
+	annotations: {
+		title:
+			'Hugging Face Hub: Find, use and view models, datasets, spaces, buckets, papers, documentation and collections. ' +
+			'Get daily papers reports, and browse trending content. ',
+		destructiveHint: false,
+		idempotentHint: false,
+		readOnlyHint: true,
+		openWorldHint: true,
+	},
+} as const;
+
+export type HfFsOutputResult = z.infer<typeof HF_FS_RESULT_OUTPUT_SCHEMA>;
+export type HfFsBatchItemResult = z.infer<typeof HF_FS_BATCH_ITEM_OUTPUT_SCHEMA>;
+export type HfFsBatchResult = z.infer<typeof HF_FS_BATCH_OUTPUT_SCHEMA>;
 
 function normalizedLsLimit(limit: number | undefined): number {
 	return limit === undefined ? DEFAULT_LS_LIMIT : limit;
@@ -486,6 +547,20 @@ export function isHfFsAttachExecutionResult(result: HfFsExecutionResult): result
 	return 'metadata' in result;
 }
 
+export interface HfFsBatchExecutionSuccess {
+	index: number;
+	status: 'success';
+	executionResult: HfFsExecutionResult;
+}
+
+export interface HfFsBatchExecutionError {
+	index: number;
+	status: 'error';
+	error: HfFsRecoveryError;
+}
+
+export type HfFsBatchExecutionItem = HfFsBatchExecutionSuccess | HfFsBatchExecutionError;
+
 export type ParsedHfUri = ParsedNamespaceHfUri | ParsedRepoHfUri;
 
 export interface ParsedNamespaceHfUri {
@@ -537,11 +612,61 @@ interface SemanticSpaceSearchHit {
 	lastModified?: string;
 }
 
+interface HfFsAttachmentReservation {
+	bytes: number;
+	released: boolean;
+}
+
+class HfFsAttachmentBudget {
+	private usedBytes = 0;
+
+	constructor(private readonly maxBytes: number) {}
+
+	reserve(bytes: number): HfFsAttachmentReservation {
+		if (!Number.isSafeInteger(bytes) || bytes < 0) {
+			throw new HfFsAttachmentIntegrityError('Batch attachment reservation size is invalid.');
+		}
+		if (this.usedBytes + bytes > this.maxBytes) {
+			throw new HfFsAttachmentBudgetExceededError(
+				`Attachment omitted because the batch exceeds the cumulative response limit of ${this.maxBytes.toString()} bytes.`
+			);
+		}
+		this.usedBytes += bytes;
+		return { bytes, released: false };
+	}
+
+	resize(reservation: HfFsAttachmentReservation, bytes: number): void {
+		if (reservation.released) {
+			throw new HfFsAttachmentIntegrityError('Batch attachment reservation was already released.');
+		}
+		if (!Number.isSafeInteger(bytes) || bytes < 0) {
+			throw new HfFsAttachmentIntegrityError('Batch attachment size is invalid.');
+		}
+		const nextUsedBytes = this.usedBytes - reservation.bytes + bytes;
+		if (nextUsedBytes > this.maxBytes) {
+			throw new HfFsAttachmentBudgetExceededError(
+				`Attachment omitted because the batch exceeds the cumulative response limit of ${this.maxBytes.toString()} bytes.`
+			);
+		}
+		this.usedBytes = nextUsedBytes;
+		reservation.bytes = bytes;
+	}
+
+	release(reservation: HfFsAttachmentReservation): void {
+		if (reservation.released) {
+			return;
+		}
+		this.usedBytes -= reservation.bytes;
+		reservation.released = true;
+	}
+}
+
 export class HfFsTool {
 	private readonly accessToken?: string;
 	private readonly hubUrl?: string;
 	private readonly abortSignal?: AbortSignal;
 	private readonly attachmentFetch?: typeof fetch;
+	private attachmentBudget?: HfFsAttachmentBudget;
 	private readonly paperProvider: HfFsPaperProvider;
 	private readonly docsProvider: HfFsDocsProvider;
 
@@ -560,13 +685,15 @@ export class HfFsTool {
 		this.docsProvider = new HfFsDocsProvider(hubUrl);
 	}
 
-	async run(request: HfFsRequest & { cmd: 'attach' }): Promise<HfFsAttachExecutionResult>;
-	async run(request: HfFsRequest & { cmd: Exclude<HfFsRequest['cmd'], 'attach'> }): Promise<HfFsResult>;
-	async run(request: HfFsRequest): Promise<HfFsExecutionResult>;
+	async run(request: HfFsOperationRequest & { cmd: 'attach' }): Promise<HfFsAttachExecutionResult>;
+	async run(
+		request: HfFsOperationRequest & { cmd: Exclude<HfFsOperationRequest['cmd'], 'attach'> }
+	): Promise<HfFsResult>;
+	async run(request: HfFsOperationRequest): Promise<HfFsExecutionResult>;
 	async run(request: HfFsParams & { op: 'attach' }): Promise<HfFsAttachExecutionResult>;
 	async run(request: HfFsParams & { op: Exclude<HfFsParams['op'], 'attach'> }): Promise<HfFsResult>;
 	async run(request: HfFsParams): Promise<HfFsExecutionResult>;
-	async run(request: HfFsRequest | HfFsParams): Promise<HfFsExecutionResult> {
+	async run(request: HfFsOperationRequest | HfFsParams): Promise<HfFsExecutionResult> {
 		if ('op' in request) {
 			return await this.runCanonical(request);
 		}
@@ -582,6 +709,62 @@ export class HfFsTool {
 			};
 		}
 		return { ...result, warnings: parsed.warnings };
+	}
+
+	async runBatch(
+		request: HfFsRequest,
+		options: { imageContentDisabled?: boolean } = {}
+	): Promise<HfFsBatchExecutionItem[]> {
+		const validatedRequest = HF_FS_SCHEMA.parse(request);
+		if (this.attachmentBudget) {
+			throw new Error('ENOTSUP: concurrent hf_fs batches on one tool instance are not supported');
+		}
+		this.attachmentBudget = new HfFsAttachmentBudget(HF_FS_ATTACH_MAX_BYTES);
+		const results: HfFsBatchExecutionItem[] = [];
+
+		try {
+			for (let start = 0; start < validatedRequest.operations.length; start += HF_FS_BATCH_CONCURRENCY) {
+				this.abortSignal?.throwIfAborted();
+				const chunk = validatedRequest.operations.slice(start, start + HF_FS_BATCH_CONCURRENCY);
+				const chunkResults = await Promise.all(
+					chunk.map(async (operation, offset): Promise<HfFsBatchExecutionItem | { fatalError: unknown }> => {
+						const index = start + offset;
+						try {
+							if (operation.cmd === 'attach' && options.imageContentDisabled) {
+								throw new HfFsImageContentDisabledError();
+							}
+							return {
+								index,
+								status: 'success',
+								executionResult: await this.run(operation),
+							};
+						} catch (error) {
+							if (this.abortSignal?.aborted) {
+								return { fatalError: error };
+							}
+							const recoveryError = classifyHfFsError(error);
+							if (!recoveryError) {
+								return { fatalError: error };
+							}
+							return { index, status: 'error', error: recoveryError };
+						}
+					})
+				);
+				const fatal = chunkResults.find((result): result is { fatalError: unknown } => 'fatalError' in result);
+				if (fatal) {
+					throw fatal.fatalError;
+				}
+				for (const result of chunkResults) {
+					if ('fatalError' in result) {
+						throw result.fatalError;
+					}
+					results.push(result);
+				}
+			}
+			return results;
+		} finally {
+			this.attachmentBudget = undefined;
+		}
 	}
 
 	async runCanonical(params: HfFsParams): Promise<HfFsExecutionResult> {
@@ -1045,49 +1228,63 @@ export class HfFsTool {
 		}
 
 		const maxBytes = params.max_bytes ?? HF_FS_ATTACH_MAX_BYTES;
-		const stat = await this.stat(params, {
-			attachmentPreflight: true,
-			...(this.attachmentFetch ? { fetch: this.attachmentFetch } : {}),
-		});
-		this.abortSignal?.throwIfAborted();
-		if (!stat.exists) {
-			throw new Error(`File does not exist: ${parsed.path}`);
-		}
-		if (stat.type !== 'file') {
-			throw new Error(`attach requires a file path, got ${stat.type}: ${parsed.path}`);
-		}
-		if (stat.size !== undefined) {
-			assertValidAttachmentSize(stat.size, 'File size metadata');
-			assertAttachmentWithinLimit(stat.size, maxBytes, parsed.path);
-		}
+		let reservation: HfFsAttachmentReservation | undefined;
+		try {
+			const stat = await this.stat(params, {
+				attachmentPreflight: true,
+				...(this.attachmentFetch ? { fetch: this.attachmentFetch } : {}),
+			});
+			this.abortSignal?.throwIfAborted();
+			if (!stat.exists) {
+				throw new Error(`File does not exist: ${parsed.path}`);
+			}
+			if (stat.type !== 'file') {
+				throw new Error(`attach requires a file path, got ${stat.type}: ${parsed.path}`);
+			}
+			if (stat.size !== undefined) {
+				assertValidAttachmentSize(stat.size, 'File size metadata');
+				assertAttachmentWithinLimit(stat.size, maxBytes, parsed.path);
+			}
+			if (this.attachmentBudget) {
+				reservation = this.attachmentBudget.reserve(stat.size ?? maxBytes);
+			}
 
-		const blob = await downloadFile({
-			repo: parsed.repo,
-			path: parsed.path,
-			...(parsed.revision ? { revision: parsed.revision } : {}),
-			...(this.hubUrl ? { hubUrl: this.hubUrl } : {}),
-			...(this.accessToken ? { accessToken: this.accessToken } : {}),
-			...(this.attachmentFetch ? { fetch: this.attachmentFetch } : {}),
-		});
-		this.abortSignal?.throwIfAborted();
-		if (!blob) {
-			throw new Error(`File does not exist: ${parsed.path}`);
-		}
-
-		const blobSize = blob.size;
-		assertValidAttachmentSize(blobSize, 'Downloaded Blob size');
-		assertAttachmentWithinLimit(blobSize, maxBytes, parsed.path);
-		const data = await readBlobExactly(blob, blobSize, maxBytes, this.abortSignal);
-		return {
-			metadata: {
-				op: 'attach',
-				uri: params.uri,
+			const blob = await downloadFile({
+				repo: parsed.repo,
 				path: parsed.path,
-				mime_type: mimeType,
-				bytes: data.byteLength,
-			},
-			data,
-		};
+				...(parsed.revision ? { revision: parsed.revision } : {}),
+				...(this.hubUrl ? { hubUrl: this.hubUrl } : {}),
+				...(this.accessToken ? { accessToken: this.accessToken } : {}),
+				...(this.attachmentFetch ? { fetch: this.attachmentFetch } : {}),
+			});
+			this.abortSignal?.throwIfAborted();
+			if (!blob) {
+				throw new Error(`File does not exist: ${parsed.path}`);
+			}
+
+			const blobSize = blob.size;
+			assertValidAttachmentSize(blobSize, 'Downloaded Blob size');
+			assertAttachmentWithinLimit(blobSize, maxBytes, parsed.path);
+			if (reservation) {
+				this.attachmentBudget?.resize(reservation, blobSize);
+			}
+			const data = await readBlobExactly(blob, blobSize, maxBytes, this.abortSignal);
+			return {
+				metadata: {
+					op: 'attach',
+					uri: params.uri,
+					path: parsed.path,
+					mime_type: mimeType,
+					bytes: data.byteLength,
+				},
+				data,
+			};
+		} catch (error) {
+			if (reservation) {
+				this.attachmentBudget?.release(reservation);
+			}
+			throw error;
+		}
 	}
 
 	private async stat(
@@ -1448,6 +1645,155 @@ export function formatHfFsMarkdown(result: HfFsResult, maxChars = HF_FS_MAX_OUTP
 		? `${markdown}\n\n## Warnings\n\n${result.warnings.map((warning) => `- ${warning}`).join('\n')}`
 		: markdown;
 	return trimMarkdownToBudget(withWarnings, maxChars);
+}
+
+export function formatHfFsBatchMarkdown(
+	items: readonly HfFsBatchExecutionItem[],
+	maxChars = HF_FS_MAX_OUTPUT_CHARS
+): string {
+	const sections = items.map((item) => {
+		const heading = `## Operation ${(item.index + 1).toString()}`;
+		if (item.status === 'error') {
+			return `${heading}\n\n${formatHfFsRecoveryError(item.error)}`;
+		}
+		return `${heading}\n\n${formatHfFsMarkdown(hfFsExecutionMetadata(item.executionResult), Number.MAX_SAFE_INTEGER)}`;
+	});
+	const markdown = sections.join('\n\n---\n\n');
+	if (fitsWithinCharBudget(markdown, maxChars)) {
+		return markdown;
+	}
+	const suffix =
+		'\n\n_Batch output truncated to fit the hf_fs cumulative output budget. Re-run omitted operations or use narrower limits._';
+	if (suffix.length >= maxChars) {
+		return suffix.slice(0, maxChars);
+	}
+	return `${markdown.slice(0, maxChars - suffix.length).trimEnd()}${suffix}`;
+}
+
+export function toHfFsBatchResult(
+	items: readonly HfFsBatchExecutionItem[],
+	maxChars = HF_FS_MAX_OUTPUT_CHARS
+): HfFsBatchResult {
+	const results: HfFsBatchItemResult[] = [];
+	let truncated = false;
+
+	for (const item of items) {
+		if (item.status === 'error') {
+			results.push({
+				index: item.index,
+				status: 'error',
+				error: item.error,
+			});
+			continue;
+		}
+
+		const result = hfFsExecutionMetadata(item.executionResult);
+		const full: HfFsBatchItemResult = {
+			index: item.index,
+			status: 'success',
+			result,
+		};
+		if (batchStructuredChars([...results, full], truncated) <= maxChars) {
+			results.push(full);
+			continue;
+		}
+
+		truncated = true;
+		results.push({
+			index: item.index,
+			status: 'success',
+			result: compactHfFsOutputResult(result),
+			output_truncated: true,
+		});
+	}
+
+	if (batchStructuredChars(results, truncated) > maxChars) {
+		let stringLimit = Math.min(512, Math.max(0, maxChars));
+		let boundedResults = results.map((result) => boundHfFsBatchItem(result, stringLimit));
+		while (batchStructuredChars(boundedResults, true) > maxChars && stringLimit > 0) {
+			stringLimit = Math.floor(stringLimit / 2);
+			boundedResults = results.map((result) => boundHfFsBatchItem(result, stringLimit));
+		}
+		return {
+			results: boundedResults,
+			truncated: true,
+			truncation_reason: 'output_budget',
+		};
+	}
+
+	return {
+		results,
+		...(truncated ? { truncated: true, truncation_reason: 'output_budget' as const } : {}),
+	};
+}
+
+function hfFsExecutionMetadata(result: HfFsExecutionResult): HfFsResult {
+	return isHfFsAttachExecutionResult(result) ? result.metadata : result;
+}
+
+function compactHfFsOutputResult(result: HfFsResult): HfFsOutputResult {
+	const compact: HfFsOutputResult = { ...result };
+	if ('entries' in compact) {
+		delete compact.entries;
+	}
+	if ('content' in compact) {
+		delete compact.content;
+	}
+	return compact;
+}
+
+function boundHfFsBatchItem(item: HfFsBatchItemResult, stringLimit: number): HfFsBatchItemResult {
+	if (item.status === 'error') {
+		return {
+			index: item.index,
+			status: 'error',
+			error: {
+				...item.error,
+				message: truncateHfFsBatchString(item.error.message, stringLimit),
+				recovery: truncateHfFsBatchString(item.error.recovery, stringLimit),
+			},
+		};
+	}
+
+	const result = item.result;
+	const uri = truncateHfFsBatchString(result.uri, stringLimit);
+	if (result.op === 'attach') {
+		return {
+			index: item.index,
+			status: 'success',
+			result: {
+				op: result.op,
+				uri,
+				path: truncateHfFsBatchString(result.path ?? '', stringLimit),
+				mime_type: result.mime_type ?? 'image/png',
+				bytes: result.bytes ?? 0,
+			},
+			output_truncated: true,
+		};
+	}
+	return {
+		index: item.index,
+		status: 'success',
+		result: { op: result.op, uri },
+		output_truncated: true,
+	};
+}
+
+function truncateHfFsBatchString(value: string, maxChars: number): string {
+	if (value.length <= maxChars) {
+		return value;
+	}
+	if (maxChars <= 1) {
+		return value.slice(0, maxChars);
+	}
+	return `${value.slice(0, maxChars - 1)}…`;
+}
+
+function batchStructuredChars(results: readonly HfFsBatchItemResult[], truncated: boolean): number {
+	return JSON.stringify({
+		results,
+		...(truncated ? { truncated: true, truncation_reason: 'output_budget' } : {}),
+	}).length;
 }
 
 function renderHfFsMarkdown(result: HfFsResult): string {

@@ -42,60 +42,125 @@ describe('hf_fs MCP wiring', () => {
 			expect(listedTool?.outputSchema).toMatchObject({
 				type: 'object',
 				additionalProperties: false,
-				allOf: [
-					{
-						if: { properties: { op: { const: 'attach' } }, required: ['op'] },
-						then: { required: ['path', 'mime_type', 'bytes'] },
+				required: ['results'],
+			});
+			expect(listedTool?.inputSchema).toMatchObject({
+				type: 'object',
+				additionalProperties: false,
+				required: ['operations'],
+				properties: {
+					operations: {
+						type: 'array',
+						minItems: 1,
+						maxItems: 30,
 					},
-				],
+				},
 			});
 			const result = await client.callTool({
 				name: 'hf_fs',
-				arguments: { cmd: 'ls', args: ['hf://models', '--sort', 'downloads'] },
+				arguments: {
+					operations: [{ cmd: 'ls', args: ['hf://models', '--sort', 'downloads'] }],
+				},
 			});
 			expect(result.isError).toBe(true);
-			expect(result.structuredContent).toBeUndefined();
+			expect(result.structuredContent).toMatchObject({
+				results: [
+					{
+						index: 0,
+						status: 'error',
+						error: {
+							code: 'HF_FS_INVALID_ARGUMENT',
+							retryable: false,
+						},
+					},
+				],
+			});
 			expect(result.content).toEqual([
 				{
 					type: 'text',
-					text: expect.stringMatching(/^\[HF_FS_INVALID_ARGUMENT\] EINVAL: sort is not supported.*\nRecovery:/),
+					text: expect.stringMatching(
+						/^## Operation 1\n\n\[HF_FS_INVALID_ARGUMENT\] EINVAL: sort is not supported.*\nRecovery:/
+					),
 				},
 			]);
-			expect(result._meta).toEqual({
-				'huggingface.co/hf_fs_error': {
-					code: 'HF_FS_INVALID_ARGUMENT',
-					retryable: false,
-				},
-			});
 
 			const unsupported = await client.callTool({
 				name: 'hf_fs',
-				arguments: { cmd: 'find', args: ['hf://'] },
+				arguments: { operations: [{ cmd: 'find', args: ['hf://'] }] },
 			});
-			expect(unsupported).toMatchObject({
-				isError: true,
-				_meta: {
-					'huggingface.co/hf_fs_error': {
-						code: 'HF_FS_UNSUPPORTED_OPERATION',
-						retryable: false,
-						suggestedOperation: 'search',
+			expect(unsupported.structuredContent).toMatchObject({
+				results: [
+					{
+						index: 0,
+						status: 'error',
+						error: {
+							code: 'HF_FS_UNSUPPORTED_OPERATION',
+							retryable: false,
+							suggestedOperation: 'search',
+						},
 					},
-				},
+				],
 			});
 
 			const notAFile = await client.callTool({
 				name: 'hf_fs',
-				arguments: { cmd: 'cat', args: ['hf://models/org/repo'] },
+				arguments: { operations: [{ cmd: 'cat', args: ['hf://models/org/repo'] }] },
 			});
-			expect(notAFile).toMatchObject({
-				isError: true,
-				_meta: {
-					'huggingface.co/hf_fs_error': {
-						code: 'HF_FS_NOT_A_FILE',
-						retryable: false,
-						suggestedOperation: 'stat',
+			expect(notAFile.structuredContent).toMatchObject({
+				results: [
+					{
+						index: 0,
+						status: 'error',
+						error: {
+							code: 'HF_FS_NOT_A_FILE',
+							retryable: false,
+							suggestedOperation: 'stat',
+						},
 					},
+				],
+			});
+		} finally {
+			await client.close();
+			await server.close();
+		}
+	});
+
+	it('returns successful and failed operations together in input order', async () => {
+		const apiClient = new McpApiClient({ type: 'static' }, transportInfo);
+		const factory = createServerFactory(apiClient);
+		const { server } = await factory({}, { builtInTools: [], spaceTools: [] }, true, {});
+		const client = new Client({ name: 'hf-fs-wiring-test', version: '1.0.0' });
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+		await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+		try {
+			const result = await client.callTool({
+				name: 'hf_fs',
+				arguments: {
+					operations: [
+						{ cmd: 'cat', args: ['hf://models/org/repo'] },
+						{ cmd: 'stat', args: ['hf://models'] },
+					],
 				},
+			});
+			expect(result.isError).not.toBe(true);
+			expect(result.structuredContent).toMatchObject({
+				results: [
+					{
+						index: 0,
+						status: 'error',
+						error: { code: 'HF_FS_NOT_A_FILE' },
+					},
+					{
+						index: 1,
+						status: 'success',
+						result: {
+							op: 'stat',
+							uri: 'hf://models',
+							exists: true,
+						},
+					},
+				],
 			});
 		} finally {
 			await client.close();
@@ -122,15 +187,25 @@ describe('hf_fs MCP wiring', () => {
 		try {
 			const result = await client.callTool({
 				name: 'hf_fs',
-				arguments: { cmd: 'attach', args: ['hf://models/org/repo/images/sample.PNG'] },
+				arguments: {
+					operations: [{ cmd: 'attach', args: ['hf://models/org/repo/images/sample.PNG'] }],
+				},
 			});
 			expect(result.isError).not.toBe(true);
 			expect(result.structuredContent).toEqual({
-				op: 'attach',
-				uri: 'hf://models/org/repo/images/sample.PNG',
-				path: 'images/sample.PNG',
-				mime_type: 'image/png',
-				bytes: opaqueBytes.length,
+				results: [
+					{
+						index: 0,
+						status: 'success',
+						result: {
+							op: 'attach',
+							uri: 'hf://models/org/repo/images/sample.PNG',
+							path: 'images/sample.PNG',
+							mime_type: 'image/png',
+							bytes: opaqueBytes.length,
+						},
+					},
+				],
 			});
 			expect(result.content).toEqual([
 				{
@@ -176,19 +251,24 @@ describe('hf_fs MCP wiring', () => {
 		try {
 			const result = await client.callTool({
 				name: 'hf_fs',
-				arguments: { cmd: 'attach', args: ['hf://models/org/repo/image.png'] },
+				arguments: { operations: [{ cmd: 'attach', args: ['hf://models/org/repo/image.png'] }] },
+			});
+			expect(result.structuredContent).toMatchObject({
+				results: [
+					{
+						index: 0,
+						status: 'error',
+						error: {
+							code: 'HF_FS_ATTACHMENT_INTEGRITY',
+							retryable: false,
+							suggestedOperation: 'stat',
+						},
+					},
+				],
 			});
 			expect(result).toMatchObject({
 				isError: true,
-				_meta: {
-					'huggingface.co/hf_fs_error': {
-						code: 'HF_FS_ATTACHMENT_INTEGRITY',
-						retryable: false,
-						suggestedOperation: 'stat',
-					},
-				},
 			});
-			expect(result.structuredContent).toBeUndefined();
 			expect(cancel).toHaveBeenCalledOnce();
 		} finally {
 			await client.close();
@@ -211,17 +291,23 @@ describe('hf_fs MCP wiring', () => {
 		try {
 			const result = await client.callTool({
 				name: 'hf_fs',
-				arguments: { cmd: 'attach', args: ['hf://models/org/repo/image.png'] },
+				arguments: { operations: [{ cmd: 'attach', args: ['hf://models/org/repo/image.png'] }] },
+			});
+			expect(result.structuredContent).toMatchObject({
+				results: [
+					{
+						index: 0,
+						status: 'error',
+						error: {
+							code: 'HF_FS_IMAGE_CONTENT_DISABLED',
+							retryable: false,
+							suggestedOperation: 'stat',
+						},
+					},
+				],
 			});
 			expect(result).toMatchObject({
 				isError: true,
-				_meta: {
-					'huggingface.co/hf_fs_error': {
-						code: 'HF_FS_IMAGE_CONTENT_DISABLED',
-						retryable: false,
-						suggestedOperation: 'stat',
-					},
-				},
 			});
 			expect(pathsInfo).not.toHaveBeenCalled();
 			expect(downloadFile).not.toHaveBeenCalled();

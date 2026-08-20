@@ -1,8 +1,43 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseHfFsRequest } from './hf-fs-contract.js';
+import {
+	HF_FS_ATTACH_MAX_BYTES,
+	HF_FS_BATCH_MAX_OPERATIONS,
+	HF_FS_SCHEMA,
+	parseHfFsRequest,
+} from './hf-fs-contract.js';
 
 describe('parseHfFsRequest', () => {
+	it('requires a strict operations array with at most 30 items', () => {
+		expect(
+			HF_FS_SCHEMA.parse({
+				operations: [{ cmd: 'stat', args: ['hf://models/org/repo'] }],
+			})
+		).toEqual({
+			operations: [{ cmd: 'stat', args: ['hf://models/org/repo'] }],
+		});
+		expect(() => HF_FS_SCHEMA.parse({ operations: [] })).toThrow();
+		expect(() =>
+			HF_FS_SCHEMA.parse({
+				operations: Array.from({ length: HF_FS_BATCH_MAX_OPERATIONS + 1 }, () => ({
+					cmd: 'stat',
+					args: ['hf://models/org/repo'],
+				})),
+			})
+		).toThrow();
+		expect(() =>
+			HF_FS_SCHEMA.parse({
+				operations: [{ cmd: 'stat', args: ['hf://models/org/repo'], extra: true }],
+			})
+		).toThrow();
+		expect(() =>
+			HF_FS_SCHEMA.parse({
+				operations: [{ cmd: 'stat', args: ['hf://models/org/repo'] }],
+				cmd: 'stat',
+			})
+		).toThrow();
+	});
+
 	it('parses command arguments into canonical parameters', () => {
 		expect(
 			parseHfFsRequest({
@@ -150,6 +185,13 @@ describe('parseHfFsRequest', () => {
 				args: ['hf://datasets/org/repo/images/example.png', '-max-bytes', '1'],
 			})
 		).toThrow('unexpected argument for attach');
+
+		expect(
+			parseHfFsRequest({
+				cmd: 'attach',
+				args: ['hf://datasets/org/repo/images/example.png', '--max-bytes', HF_FS_ATTACH_MAX_BYTES.toString()],
+			}).params.max_bytes
+		).toBe(HF_FS_ATTACH_MAX_BYTES);
 	});
 
 	it('allows queryless repository discovery but still requires docs and paper queries', () => {
@@ -340,7 +382,13 @@ describe('parseHfFsRequest', () => {
 		[{ cmd: 'ls', args: ['hf://models/trending', '--limit', '21'] }, 'limit must be between 1 and 20'],
 		[{ cmd: 'cat', args: ['hf://models/org/repo/README.md', '--max-bytes', '80001'] }, 'max_bytes'],
 		[{ cmd: 'attach', args: ['hf://models/org/repo/image.png', '--max-bytes', '0'] }, 'attach max_bytes'],
-		[{ cmd: 'attach', args: ['hf://models/org/repo/image.png', '--max-bytes', '4194305'] }, 'attach max_bytes'],
+		[
+			{
+				cmd: 'attach',
+				args: ['hf://models/org/repo/image.png', '--max-bytes', (HF_FS_ATTACH_MAX_BYTES + 1).toString()],
+			},
+			'attach max_bytes',
+		],
 	] as const)('rejects invalid argv: %o', (request, message) => {
 		expect(() => parseHfFsRequest({ cmd: request.cmd, args: [...request.args] })).toThrow(message);
 	});

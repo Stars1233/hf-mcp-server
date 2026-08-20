@@ -8,6 +8,7 @@ export const HF_FS_ERROR_CODES = [
 	'HF_FS_IMAGE_ONLY',
 	'HF_FS_UNSUPPORTED_MEDIA',
 	'HF_FS_IMAGE_TOO_LARGE',
+	'HF_FS_ATTACHMENT_BUDGET_EXCEEDED',
 	'HF_FS_IMAGE_CONTENT_DISABLED',
 	'HF_FS_ATTACHMENT_INTEGRITY',
 ] as const;
@@ -57,6 +58,15 @@ export class HfFsImageTooLargeError extends Error {
 	constructor(message: string) {
 		super(message);
 		this.name = 'HfFsImageTooLargeError';
+	}
+}
+
+export class HfFsAttachmentBudgetExceededError extends Error {
+	readonly code = 'HF_FS_ATTACHMENT_BUDGET_EXCEEDED';
+
+	constructor(message: string) {
+		super(message);
+		this.name = 'HfFsAttachmentBudgetExceededError';
 	}
 }
 
@@ -117,6 +127,14 @@ export function classifyHfFsError(error: unknown): HfFsRecoveryError | undefined
 			error.message,
 			'Use stat for metadata. Attach cannot truncate images or exceed its configured complete-file limit.',
 			'stat'
+		);
+	}
+	if (error instanceof HfFsAttachmentBudgetExceededError || errorCode(error) === 'HF_FS_ATTACHMENT_BUDGET_EXCEEDED') {
+		return recoveryError(
+			'HF_FS_ATTACHMENT_BUDGET_EXCEEDED',
+			error.message,
+			'This attachment was omitted because other attachments already reserved the call’s shared 8 MiB payload budget. Retry it in a separate hf_fs call.',
+			'attach'
 		);
 	}
 	if (error instanceof HfFsImageContentDisabledError || errorCode(error) === 'HF_FS_IMAGE_CONTENT_DISABLED') {

@@ -14,12 +14,15 @@ import {
 } from '@huggingface/hub';
 import {
 	HF_FS_ATTACH_MAX_BYTES,
+	HF_FS_BATCH_CONCURRENCY,
 	HF_FS_MAX_OUTPUT_CHARS,
 	HF_FS_TOOL_CONFIG,
 	HfFsTool,
+	formatHfFsBatchMarkdown,
 	formatHfFsMarkdown,
 	isHfFsAttachExecutionResult,
 	parseHfFsUri,
+	toHfFsBatchResult,
 } from './hf-fs.js';
 import { classifyHfFsError } from './hf-fs-errors.js';
 
@@ -78,18 +81,39 @@ function createStreamingBlob(
 	} as unknown as Blob;
 }
 
+function expectBatchOutputSchemaAccepts(result: unknown): void {
+	const output = {
+		results: [{ index: 0, status: 'success' as const, result }],
+	};
+	expect(HF_FS_TOOL_CONFIG.outputSchema.parse(output)).toEqual(output);
+}
+
 describe('HfFsTool config', () => {
-	it('exposes the argv schema and command grammar', () => {
-		expect(Object.keys(HF_FS_TOOL_CONFIG.schema.shape)).toEqual(['cmd', 'args']);
-		expect(HF_FS_TOOL_CONFIG.description).toContain('Grammar; each token below is one args array element');
+	it('exposes the strict batch schema and concise command grammar', () => {
+		expect(Object.keys(HF_FS_TOOL_CONFIG.schema.shape)).toEqual(['operations']);
+		expect(HF_FS_TOOL_CONFIG.schema.safeParse({ operations: [] }).success).toBe(false);
+		expect(
+			HF_FS_TOOL_CONFIG.schema.safeParse({
+				operations: Array.from({ length: 30 }, () => ({ cmd: 'stat' as const, args: ['hf://models'] })),
+			}).success
+		).toBe(true);
+		expect(
+			HF_FS_TOOL_CONFIG.schema.safeParse({
+				operations: Array.from({ length: 31 }, () => ({ cmd: 'stat' as const, args: ['hf://models'] })),
+			}).success
+		).toBe(false);
+		expect(
+			HF_FS_TOOL_CONFIG.schema.safeParse({
+				operations: [{ cmd: 'stat', args: ['hf://models'], extra: true }],
+			}).success
+		).toBe(false);
+		expect(HF_FS_TOOL_CONFIG.description).toContain('multiple operations may be submitted together');
+		expect(HF_FS_TOOL_CONFIG.description).toContain('{"operations":[{"cmd":"ls","args":["hf://models/org/repo"]}]}');
+		expect(HF_FS_TOOL_CONFIG.description).not.toContain('only tool');
+		expect(HF_FS_TOOL_CONFIG.description).toContain('Grammar; each string below is one args array item');
 		expect(HF_FS_TOOL_CONFIG.description).toContain('ls hf://models/trending');
-		expect(HF_FS_TOOL_CONFIG.description).toContain('ls hf://papers/trending');
-		expect(HF_FS_TOOL_CONFIG.description).toContain('ls hf://docs for products');
+		expect(HF_FS_TOOL_CONFIG.description).toContain('hf://papers/trending');
 		expect(HF_FS_TOOL_CONFIG.description).toContain('hf://README.md');
-		expect(HF_FS_TOOL_CONFIG.description).toContain('Cat reads confirmed UTF-8 text files only');
-		expect(HF_FS_TOOL_CONFIG.description).toContain('reuse the returned URI, or the Target URI for links, verbatim');
-		expect(HF_FS_TOOL_CONFIG.description).toContain('Use search—not an unscoped find—for global');
-		expect(HF_FS_TOOL_CONFIG.description).toContain('never with repository file listings or documentation');
 		expect(HF_FS_TOOL_CONFIG.description).toContain('attach URI [--max-bytes N]');
 	});
 
@@ -101,33 +125,42 @@ describe('HfFsTool config', () => {
 			mime_type: 'image/png' as const,
 			bytes: 3,
 		};
-		expect(HF_FS_TOOL_CONFIG.outputSchema.parse(metadata)).toEqual(metadata);
-		expect(() => HF_FS_TOOL_CONFIG.outputSchema.parse({ ...metadata, data: Uint8Array.from([1, 2, 3]) })).toThrow();
-		expect(() => HF_FS_TOOL_CONFIG.outputSchema.parse({ ...metadata, base64: 'AQID' })).toThrow();
-		expect(() => HF_FS_TOOL_CONFIG.outputSchema.parse({ ...metadata, bytes: Uint8Array.from([1, 2, 3]) })).toThrow();
+		expectBatchOutputSchemaAccepts(metadata);
+		expect(() =>
+			HF_FS_TOOL_CONFIG.outputSchema.parse({
+				results: [{ index: 0, status: 'success', result: { ...metadata, data: Uint8Array.from([1, 2, 3]) } }],
+			})
+		).toThrow();
+		expect(() =>
+			HF_FS_TOOL_CONFIG.outputSchema.parse({
+				results: [{ index: 0, status: 'success', result: { ...metadata, base64: 'AQID' } }],
+			})
+		).toThrow();
+		expect(() =>
+			HF_FS_TOOL_CONFIG.outputSchema.parse({
+				results: [{ index: 0, status: 'success', result: { ...metadata, bytes: Uint8Array.from([1, 2, 3]) } }],
+			})
+		).toThrow();
 		for (const field of ['path', 'mime_type', 'bytes'] as const) {
 			const missing: Partial<typeof metadata> = { ...metadata };
 			delete missing[field];
-			expect(() => HF_FS_TOOL_CONFIG.outputSchema.parse(missing)).toThrow();
+			expect(() =>
+				HF_FS_TOOL_CONFIG.outputSchema.parse({
+					results: [{ index: 0, status: 'success', result: missing }],
+				})
+			).toThrow();
 		}
-		expect(() => HF_FS_TOOL_CONFIG.outputSchema.parse({ ...metadata, bytes: HF_FS_ATTACH_MAX_BYTES + 1 })).toThrow();
+		expect(() =>
+			HF_FS_TOOL_CONFIG.outputSchema.parse({
+				results: [{ index: 0, status: 'success', result: { ...metadata, bytes: HF_FS_ATTACH_MAX_BYTES + 1 } }],
+			})
+		).toThrow();
 
 		const jsonSchema = z.toJSONSchema(HF_FS_TOOL_CONFIG.outputSchema);
 		expect(jsonSchema.additionalProperties).toBe(false);
-		expect(jsonSchema.allOf).toContainEqual({
-			if: {
-				properties: { op: { const: 'attach' } },
-				required: ['op'],
-			},
-			then: {
-				properties: {
-					path: { type: 'string' },
-					mime_type: { type: 'string', enum: ['image/jpeg', 'image/png', 'image/webp'] },
-					bytes: { type: 'integer', minimum: 0, maximum: HF_FS_ATTACH_MAX_BYTES },
-				},
-				required: ['path', 'mime_type', 'bytes'],
-			},
-		});
+		expect(jsonSchema.properties).toHaveProperty('results');
+		expect(JSON.stringify(jsonSchema)).toContain('"const":"attach"');
+		expect(JSON.stringify(jsonSchema)).toContain(`"maximum":${HF_FS_ATTACH_MAX_BYTES.toString()}`);
 	});
 });
 
@@ -218,6 +251,189 @@ describe('HfFsTool', () => {
 		vi.stubGlobal('fetch', vi.fn());
 	});
 
+	it('runs operations in ordered parallel chunks', async () => {
+		let active = 0;
+		let maximumActive = 0;
+		const started: string[] = [];
+		let releaseFirstChunk: (() => void) | undefined;
+		const firstChunkGate = new Promise<void>((resolve) => {
+			releaseFirstChunk = resolve;
+		});
+		vi.mocked(pathsInfo).mockImplementation(({ paths }) =>
+			Promise.resolve([{ path: paths[0] ?? '', type: 'file', size: 32 }])
+		);
+		vi.mocked(downloadFile).mockImplementation(async ({ path }) => {
+			started.push(path);
+			active += 1;
+			maximumActive = Math.max(maximumActive, active);
+			if (started.length <= HF_FS_BATCH_CONCURRENCY) {
+				await firstChunkGate;
+			}
+			active -= 1;
+			return new Blob([path]);
+		});
+
+		const operations = Array.from({ length: HF_FS_BATCH_CONCURRENCY + 1 }, (_, index) => ({
+			cmd: 'cat' as const,
+			args: [`hf://models/org/repo/file-${index.toString()}.txt`],
+		}));
+		const run = new HfFsTool().runBatch({ operations });
+		await vi.waitFor(() => {
+			expect(started).toHaveLength(HF_FS_BATCH_CONCURRENCY);
+		});
+		expect(maximumActive).toBe(HF_FS_BATCH_CONCURRENCY);
+		expect(started).not.toContain(`file-${HF_FS_BATCH_CONCURRENCY.toString()}.txt`);
+		releaseFirstChunk?.();
+
+		const results = await run;
+		expect(started).toHaveLength(HF_FS_BATCH_CONCURRENCY + 1);
+		expect(results.map((result) => result.index)).toEqual(
+			Array.from({ length: HF_FS_BATCH_CONCURRENCY + 1 }, (_, index) => index)
+		);
+		expect(
+			results.map((result) =>
+				result.status === 'success' && !isHfFsAttachExecutionResult(result.executionResult)
+					? result.executionResult.uri
+					: undefined
+			)
+		).toEqual(operations.map((operation) => operation.args[0]));
+	});
+
+	it('isolates deterministic operation errors while preserving successful results', async () => {
+		const results = await new HfFsTool().runBatch({
+			operations: [
+				{ cmd: 'cat', args: ['hf://models/org/repo'] },
+				{ cmd: 'stat', args: ['hf://models'] },
+			],
+		});
+
+		expect(results).toMatchObject([
+			{
+				index: 0,
+				status: 'error',
+				error: {
+					code: 'HF_FS_NOT_A_FILE',
+					retryable: false,
+					suggestedOperation: 'stat',
+				},
+			},
+			{
+				index: 1,
+				status: 'success',
+				executionResult: {
+					op: 'stat',
+					uri: 'hf://models',
+					exists: true,
+				},
+			},
+		]);
+	});
+
+	it('caps cumulative batch text and structured content', () => {
+		const items = [0, 1].map((index) => ({
+			index,
+			status: 'success' as const,
+			executionResult: {
+				op: 'cat' as const,
+				uri: `hf://models/org/repo/file-${index.toString()}.txt`,
+				path: `file-${index.toString()}.txt`,
+				content: 'x'.repeat(60_000),
+				bytes: 60_000,
+				truncated: false,
+			},
+		}));
+
+		const markdown = formatHfFsBatchMarkdown(items);
+		expect(markdown.length).toBeLessThanOrEqual(HF_FS_MAX_OUTPUT_CHARS);
+		expect(markdown).toContain('Batch output truncated');
+
+		const structured = toHfFsBatchResult(items);
+		expect(JSON.stringify(structured).length).toBeLessThanOrEqual(HF_FS_MAX_OUTPUT_CHARS);
+		expect(structured).toMatchObject({
+			truncated: true,
+			truncation_reason: 'output_budget',
+			results: [
+				{ index: 0, status: 'success' },
+				{ index: 1, status: 'success', output_truncated: true },
+			],
+		});
+		expect(structured.results[1]).not.toHaveProperty('result.content');
+		expect(HF_FS_TOOL_CONFIG.outputSchema.parse(structured)).toEqual(structured);
+	});
+
+	it('caps structured error batches containing oversized user-derived messages', () => {
+		const oversized = 'x'.repeat(HF_FS_MAX_OUTPUT_CHARS);
+		const items = Array.from({ length: 30 }, (_, index) => ({
+			index,
+			status: 'error' as const,
+			error: {
+				code: 'HF_FS_INVALID_ARGUMENT' as const,
+				message: `EINVAL: ${oversized}`,
+				recovery: oversized,
+				retryable: false as const,
+			},
+		}));
+
+		const structured = toHfFsBatchResult(items);
+		expect(JSON.stringify(structured).length).toBeLessThanOrEqual(HF_FS_MAX_OUTPUT_CHARS);
+		expect(structured).toMatchObject({
+			truncated: true,
+			truncation_reason: 'output_budget',
+		});
+		expect(structured.results[0]).toMatchObject({
+			index: 0,
+			status: 'error',
+			error: {
+				code: 'HF_FS_INVALID_ARGUMENT',
+				retryable: false,
+			},
+		});
+		expect(structured.results[0]?.status === 'error' && structured.results[0].error.message.length).toBeLessThanOrEqual(
+			512
+		);
+		expect(HF_FS_TOOL_CONFIG.outputSchema.parse(structured)).toEqual(structured);
+	});
+
+	it('reserves the cumulative attachment budget before downloading later images', async () => {
+		const firstPath = 'first.png';
+		const secondPath = 'second.png';
+		let releaseSecondStat: (() => void) | undefined;
+		const secondStatGate = new Promise<void>((resolve) => {
+			releaseSecondStat = resolve;
+		});
+		vi.mocked(pathsInfo).mockImplementation(async ({ paths }) => {
+			const path = paths[0] ?? '';
+			if (path === secondPath) {
+				await secondStatGate;
+			}
+			return [{ path, type: 'file', size: path === firstPath ? HF_FS_ATTACH_MAX_BYTES : 1 }];
+		});
+		vi.mocked(downloadFile).mockImplementation(({ path }) => {
+			releaseSecondStat?.();
+			return Promise.resolve(new Blob([new Uint8Array(path === firstPath ? HF_FS_ATTACH_MAX_BYTES : 1)]));
+		});
+
+		const results = await new HfFsTool().runBatch({
+			operations: [
+				{ cmd: 'attach', args: [`hf://models/org/repo/${firstPath}`] },
+				{ cmd: 'attach', args: [`hf://models/org/repo/${secondPath}`] },
+			],
+		});
+
+		expect(results[0]).toMatchObject({ index: 0, status: 'success' });
+		expect(results[1]).toMatchObject({
+			index: 1,
+			status: 'error',
+			error: {
+				code: 'HF_FS_ATTACHMENT_BUDGET_EXCEEDED',
+				suggestedOperation: 'attach',
+			},
+		});
+		expect(results[1]?.status === 'error' ? results[1].error.message : '').toContain('Attachment omitted');
+		expect(results[1]?.status === 'error' ? results[1].error.recovery : '').toContain('separate hf_fs call');
+		expect(downloadFile).toHaveBeenCalledOnce();
+	});
+
 	it('lists entries recursively with glob, type filter, offset, and limit', async () => {
 		vi.mocked(listFiles).mockReturnValue(
 			entries([
@@ -250,7 +466,7 @@ describe('HfFsTool', () => {
 			op: 'ls',
 			entries: [{ type: 'file', path: 'weights/c.gguf', size: 30 }],
 		});
-		expect(HF_FS_TOOL_CONFIG.outputSchema.parse(result)).toEqual(result);
+		expectBatchOutputSchemaAccepts(result);
 	});
 
 	it('marks ls results truncated when another matching entry exists', async () => {
@@ -320,7 +536,7 @@ describe('HfFsTool', () => {
 			op: 'find',
 			entries: [{ type: 'file', path: 'weights/model.gguf', size: 20 }],
 		});
-		expect(HF_FS_TOOL_CONFIG.outputSchema.parse(result)).toEqual(result);
+		expectBatchOutputSchemaAccepts(result);
 	});
 
 	it('finds file URIs by statting the file instead of listing it as a tree', async () => {
@@ -742,7 +958,7 @@ describe('HfFsTool', () => {
 				upvotes: 123,
 			},
 		]);
-		expect(HF_FS_TOOL_CONFIG.outputSchema.parse(result)).toEqual(result);
+		expectBatchOutputSchemaAccepts(result);
 		expect(formatHfFsMarkdown(result)).toContain('# hf_fs ls');
 	});
 
