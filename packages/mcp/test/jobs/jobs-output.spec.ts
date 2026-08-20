@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HfApiError } from '../../src/hf-api-call.js';
 import { JobsApiClient } from '../../src/jobs/api-client.js';
-import { HF_JOBS_OUTPUT_SCHEMA } from '../../src/jobs/hf-jobs-output-schema.js';
+import { HF_JOB_OUTPUT_SCHEMA, HF_JOBS_OUTPUT_SCHEMA } from '../../src/jobs/hf-jobs-output-schema.js';
 import {
 	collectSensitiveValues,
 	redactSensitiveText,
@@ -9,7 +9,7 @@ import {
 	toHfScheduledJobOutput,
 } from '../../src/jobs/jobs-output.js';
 import { HfJobsTool } from '../../src/jobs/jobs-tool.js';
-import type { JobInfo, ScheduledJobInfo } from '../../src/jobs/types.js';
+import type { JobInfo, JobOwner, ScheduledJobInfo } from '../../src/jobs/types.js';
 
 const mocks = vi.hoisted(() => ({
 	fetchJobLogs: vi.fn(),
@@ -118,6 +118,56 @@ describe('HF Jobs structured output', () => {
 		});
 		expect(JSON.stringify(output)).not.toContain('plain-value');
 		expect(JSON.stringify(output)).not.toContain('real-secret');
+	});
+
+	it('tolerates owner objects with extra profile fields (e.g. avatarUrl) from the Jobs API', () => {
+		const output = toHfJobOutput({
+			...job,
+			owner: { id: 'user-1', name: 'alice', type: 'user', avatarUrl: 'https://example.com/a.png' } as JobOwner,
+		});
+
+		expect(output.owner).toEqual({ id: 'user-1', name: 'alice', type: 'user' });
+		expect(() => HF_JOB_OUTPUT_SCHEMA.parse(output)).not.toThrow();
+	});
+
+	it('tolerates a createdBy object missing type', () => {
+		const output = toHfJobOutput({
+			...job,
+			createdBy: { id: 'user-1', name: 'alice' } as JobOwner,
+		});
+
+		expect(output.created_by).toEqual({ id: 'user-1', name: 'alice' });
+		expect(() => HF_JOB_OUTPUT_SCHEMA.parse(output)).not.toThrow();
+	});
+
+	it('accepts baseline owner shapes with and without type', () => {
+		const withType = toHfJobOutput({ ...job, owner: { id: 'user-1', name: 'alice', type: 'org' } });
+		const withoutType = toHfJobOutput({ ...job, owner: { id: 'user-1', name: 'alice' } });
+
+		expect(withType.owner).toEqual({ id: 'user-1', name: 'alice', type: 'org' });
+		expect(withoutType.owner).toEqual({ id: 'user-1', name: 'alice' });
+		expect(() => HF_JOB_OUTPUT_SCHEMA.parse(withType)).not.toThrow();
+		expect(() => HF_JOB_OUTPUT_SCHEMA.parse(withoutType)).not.toThrow();
+	});
+
+	it('preserves job id and status when owner/createdBy metadata is malformed end-to-end via the tool', async () => {
+		vi.spyOn(JobsApiClient.prototype, 'getJob').mockResolvedValue({
+			...job,
+			status: { stage: 'COMPLETED' },
+			owner: { id: 'user-1', name: 'alice', type: 'user', avatarUrl: 'https://example.com/a.png' } as JobOwner,
+			createdBy: { id: 'user-1', name: 'alice' } as JobOwner,
+		});
+
+		const result = await new HfJobsTool('token', true).execute({
+			operation: 'inspect',
+			args: { job_id: 'job-123' },
+		});
+
+		expect(result.isError).toBeUndefined();
+		expect(result.structuredContent.outcome).toMatchObject({
+			kind: 'inspections',
+			inspections: [{ job_id: 'job-123', status: 'success', job: { id: 'job-123', status: { stage: 'COMPLETED' } } }],
+		});
 	});
 
 	it('redacts known values longest-first', () => {

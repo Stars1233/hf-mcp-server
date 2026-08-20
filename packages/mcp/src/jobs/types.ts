@@ -58,7 +58,7 @@ export interface JobStatus {
 export interface JobOwner {
 	id: string;
 	name: string;
-	type: 'user' | 'org';
+	type?: 'user' | 'org';
 }
 
 /**
