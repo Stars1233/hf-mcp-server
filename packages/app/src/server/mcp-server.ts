@@ -64,6 +64,12 @@ import { SERVER_VERSION } from './server-build-info.js';
 import { parseDisabledTools } from './utils/disabled-tools.js';
 import { createProgressRelay } from './utils/progress-relay.js';
 import { getToolResultErrorMessage } from './utils/observability.js';
+import {
+	summarizeCompletedHfFsBatch,
+	summarizeInterruptedHfFsBatch,
+	type CompletedHfFsQueryTelemetry,
+} from './utils/hf-fs-telemetry.js';
+import { recordHfFsLiveMetrics } from './utils/hf-fs-live-metrics.js';
 import { AUTHENTICATION_UNVERIFIED_GUIDANCE, createHfWhoamiOutput, formatHfWhoamiMarkdown } from './utils/hf-whoami.js';
 import { fetchHfWhoami } from './utils/hf-whoami-client.js';
 import { hfWhoamiOutputSchema } from './output-schemas/hf-whoami-output-schema.js';
@@ -98,9 +104,14 @@ interface PreparedHfFsBatchExecution {
 	text: string;
 	images: { data: string; mimeType: 'image/jpeg' | 'image/png' | 'image/webp' }[];
 	successCount: number;
+	telemetry: CompletedHfFsQueryTelemetry;
 }
 
-function prepareHfFsBatchExecution(items: readonly HfFsBatchExecutionItem[]): PreparedHfFsBatchExecution {
+function prepareHfFsBatchExecution(
+	requestedCount: number,
+	items: readonly HfFsBatchExecutionItem[]
+): PreparedHfFsBatchExecution {
+	const telemetry = summarizeCompletedHfFsBatch(requestedCount, items);
 	const images = items.flatMap((item) => {
 		if (item.status !== 'success' || !isHfFsAttachExecutionResult(item.executionResult)) {
 			return [];
@@ -116,7 +127,8 @@ function prepareHfFsBatchExecution(items: readonly HfFsBatchExecutionItem[]): Pr
 		structuredContent: toHfFsBatchResult(items),
 		text: formatHfFsBatchMarkdown(items),
 		images,
-		successCount: items.filter((item) => item.status === 'success').length,
+		successCount: telemetry.hfFsOperationsSucceeded,
+		telemetry,
 	};
 }
 
@@ -209,6 +221,7 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 			parameters: Record<string, unknown>;
 			baseOptions?: BaseQueryLoggerOptions;
 			successOptions?: (result: T) => BaseQueryLoggerOptions | void;
+			failureOptions?: (error: unknown) => BaseQueryLoggerOptions | void;
 		}
 
 		const runWithQueryLogging = async <T>(
@@ -235,10 +248,13 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 				return result;
 			} catch (error) {
 				const durationMs = Math.round(performance.now() - start);
+				const failureOptions = config.failureOptions?.(error) ?? {};
+				const { success: successOverride, ...restFailureOptions } = failureOptions;
 				logFn(config.methodName, config.query, config.parameters, {
 					...config.baseOptions,
+					...restFailureOptions,
 					durationMs,
-					success: false,
+					success: successOverride ?? false,
 					error,
 				});
 				throw error;
@@ -471,12 +487,22 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 								},
 								baseOptions: getLoggingOptions(),
 								successOptions: (batchResult) => {
+									recordHfFsLiveMetrics(batchResult.telemetry);
 									return {
 										totalResults: request.operations.length,
 										resultsShared: batchResult.successCount,
 										responseCharCount: batchResult.text.length,
 										success: batchResult.successCount > 0,
+										...batchResult.telemetry,
 									};
+								},
+								failureOptions: () => {
+									const telemetry = summarizeInterruptedHfFsBatch(
+										request.operations.length,
+										ctx.mcpReq.signal.aborted ? 'cancelled' : 'failed'
+									);
+									recordHfFsLiveMetrics(telemetry);
+									return telemetry;
 								},
 							},
 							async () => {
@@ -486,7 +512,7 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 								});
 								// Encode before success telemetry is emitted. Only aggregate metrics reach
 								// logToolQuery; neither Uint8Array data nor base64 image content is logged.
-								return prepareHfFsBatchExecution(executionItems);
+								return prepareHfFsBatchExecution(request.operations.length, executionItems);
 							}
 						);
 						return {

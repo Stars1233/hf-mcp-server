@@ -6,6 +6,11 @@ import { createServerFactory } from '../../src/server/mcp-server.js';
 import { McpApiClient } from '../../src/server/utils/mcp-api-client.js';
 import type { TransportInfo } from '../../src/shared/transport-info.js';
 
+const queryLoggerMocks = vi.hoisted(() => ({
+	logToolQuery: vi.fn(),
+	logGradioEvent: vi.fn(),
+}));
+
 vi.mock('@huggingface/hub', async (importOriginal) => {
 	const actual = await importOriginal<typeof import('@huggingface/hub')>();
 	return {
@@ -14,6 +19,8 @@ vi.mock('@huggingface/hub', async (importOriginal) => {
 		pathsInfo: vi.fn(),
 	};
 });
+
+vi.mock('../../src/server/utils/query-logger.js', () => queryLoggerMocks);
 
 const transportInfo: TransportInfo = {
 	transport: 'streamableHttpJson',
@@ -27,6 +34,83 @@ describe('hf_fs MCP wiring', () => {
 	beforeEach(() => {
 		vi.mocked(pathsInfo).mockReset();
 		vi.mocked(downloadFile).mockReset();
+		queryLoggerMocks.logToolQuery.mockReset();
+		queryLoggerMocks.logGradioEvent.mockReset();
+	});
+
+	it('logs bounded operation errors and aggregate classes for a partial batch', async () => {
+		const apiClient = new McpApiClient({ type: 'static' }, transportInfo);
+		const { server } = await createServerFactory(apiClient)({}, { builtInTools: [], spaceTools: [] }, true, {});
+		const client = new Client({ name: 'hf-fs-wiring-test', version: '1.0.0' });
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+		await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+		try {
+			await client.callTool({
+				name: 'hf_fs',
+				arguments: {
+					operations: [
+						{ cmd: 'stat', args: ['hf://bogus'] },
+						{ cmd: 'stat', args: ['hf://models'] },
+					],
+				},
+			});
+
+			expect(queryLoggerMocks.logToolQuery).toHaveBeenCalledOnce();
+			expect(queryLoggerMocks.logToolQuery.mock.calls[0]?.[3]).toMatchObject({
+				totalResults: 2,
+				resultsShared: 1,
+				success: true,
+				hfFsReportingSchema: 'hf_fs_batch_v1',
+				hfFsBatchOutcome: 'partial',
+				hfFsOperationsRequested: 2,
+				hfFsOperationsCompleted: 2,
+				hfFsOperationsSucceeded: 1,
+				hfFsRequestErrorCount: 1,
+				hfFsTargetErrorCount: 0,
+				hfFsPolicyLimitErrorCount: 0,
+				hfFsServiceErrorCount: 0,
+				hfFsOperationErrorsJson: '[{"index":0,"code":"HF_FS_INVALID_ARGUMENT"}]',
+			});
+		} finally {
+			await client.close();
+			await server.close();
+		}
+	});
+
+	it('logs an interrupted batch without inventing operation outcomes', async () => {
+		vi.mocked(pathsInfo).mockResolvedValueOnce([{ path: 'image.png', type: 'file', size: 3 }]);
+		vi.mocked(downloadFile).mockRejectedValueOnce(new Error('unexpected private provider detail'));
+		const apiClient = new McpApiClient({ type: 'static' }, transportInfo);
+		const { server } = await createServerFactory(apiClient)({}, { builtInTools: [], spaceTools: [] }, true, {});
+		const client = new Client({ name: 'hf-fs-wiring-test', version: '1.0.0' });
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+		await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+		try {
+			const result = await client.callTool({
+				name: 'hf_fs',
+				arguments: {
+					operations: [{ cmd: 'attach', args: ['hf://models/org/repo/image.png'] }],
+				},
+			});
+			expect(result.isError).toBe(true);
+
+			expect(queryLoggerMocks.logToolQuery).toHaveBeenCalledOnce();
+			expect(queryLoggerMocks.logToolQuery.mock.calls[0]?.[3]).toMatchObject({
+				success: false,
+				hfFsReportingSchema: 'hf_fs_batch_v1',
+				hfFsBatchOutcome: 'failed',
+				hfFsOperationsRequested: 1,
+				hfFsOperationErrorsJson: '[]',
+				error: expect.any(Error),
+			});
+			expect(queryLoggerMocks.logToolQuery.mock.calls[0]?.[3]).not.toHaveProperty('hfFsOperationsCompleted');
+			expect(queryLoggerMocks.logToolQuery.mock.calls[0]?.[3]).not.toHaveProperty('hfFsOperationsSucceeded');
+		} finally {
+			await client.close();
+			await server.close();
+		}
 	});
 
 	it('returns fixed recovery metadata for deterministic compatibility errors', async () => {

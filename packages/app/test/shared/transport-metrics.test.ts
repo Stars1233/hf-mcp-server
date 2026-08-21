@@ -111,6 +111,21 @@ describe('MetricsCounter', () => {
 		);
 	});
 
+	it('reports client-wide tool-call error rates without counting non-tool method errors', () => {
+		const metrics = new MetricsCounter();
+		const client = { name: 'batch-client', version: '1.0.0' };
+		metrics.associateSessionWithClient(client);
+		metrics.trackMethod('tools/call:hf_fs', 10, false, client);
+		metrics.trackMethod('tools/call:hf_fs', 20, true, client);
+		metrics.trackMethod('resources/read:skill://example', 5, true, client);
+
+		expect(formatMetricsForAPI(metrics.getMetrics(), 'streamableHttpJson', true).clients[0]).toMatchObject({
+			toolCallCount: 2,
+			toolCallErrorCount: 1,
+			toolCallErrorRate: 50,
+		});
+	});
+
 	it('bounds unexpected protocol-version cardinality', () => {
 		const metrics = new MetricsCounter();
 		for (let index = 0; index < 40; index++) {

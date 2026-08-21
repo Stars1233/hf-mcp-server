@@ -8,6 +8,7 @@ import {
 	HfFsUnsupportedMediaError,
 	classifyHfFsError,
 	formatHfFsRecoveryError,
+	hfFsErrorClass,
 	type HfFsErrorCode,
 } from './hf-fs-errors.js';
 
@@ -104,5 +105,23 @@ describe('hf-fs-errors', () => {
 		expect(classifyHfFsError(Object.assign(new Error('Rate limited'), { statusCode: 429 }))).toBeUndefined();
 		expect(classifyHfFsError(new Error('Provider rejected the request with status 400'))).toBeUndefined();
 		expect(classifyHfFsError('not an error')).toBeUndefined();
+	});
+
+	it.each([
+		['HF_FS_INVALID_ARGUMENT', 'request'],
+		['HF_FS_NOT_FOUND', 'target'],
+		['HF_FS_NOT_A_DIRECTORY', 'request'],
+		['HF_FS_NOT_A_FILE', 'request'],
+		['HF_FS_UNSUPPORTED_OPERATION', 'request'],
+		['HF_FS_ACCESS_DENIED', 'target'],
+		['HF_FS_TEXT_ONLY', 'request'],
+		['HF_FS_IMAGE_ONLY', 'request'],
+		['HF_FS_UNSUPPORTED_MEDIA', 'request'],
+		['HF_FS_IMAGE_TOO_LARGE', 'policy_limit'],
+		['HF_FS_ATTACHMENT_BUDGET_EXCEEDED', 'policy_limit'],
+		['HF_FS_IMAGE_CONTENT_DISABLED', 'policy_limit'],
+		['HF_FS_ATTACHMENT_INTEGRITY', 'service'],
+	] as const)('maps %s to the %s reporting class', (code, errorClass) => {
+		expect(hfFsErrorClass(code)).toBe(errorClass);
 	});
 });

@@ -16,6 +16,30 @@ export const HF_FS_ERROR_CODES = [
 
 export type HfFsErrorCode = (typeof HF_FS_ERROR_CODES)[number];
 
+export const HF_FS_ERROR_CLASSES = ['request', 'target', 'policy_limit', 'service'] as const;
+
+export type HfFsErrorClass = (typeof HF_FS_ERROR_CLASSES)[number];
+
+const HF_FS_ERROR_CLASS_BY_CODE = {
+	HF_FS_INVALID_ARGUMENT: 'request',
+	HF_FS_NOT_FOUND: 'target',
+	HF_FS_NOT_A_DIRECTORY: 'request',
+	HF_FS_NOT_A_FILE: 'request',
+	HF_FS_UNSUPPORTED_OPERATION: 'request',
+	HF_FS_ACCESS_DENIED: 'target',
+	HF_FS_TEXT_ONLY: 'request',
+	HF_FS_IMAGE_ONLY: 'request',
+	HF_FS_UNSUPPORTED_MEDIA: 'request',
+	HF_FS_IMAGE_TOO_LARGE: 'policy_limit',
+	HF_FS_ATTACHMENT_BUDGET_EXCEEDED: 'policy_limit',
+	HF_FS_IMAGE_CONTENT_DISABLED: 'policy_limit',
+	HF_FS_ATTACHMENT_INTEGRITY: 'service',
+} as const satisfies Record<HfFsErrorCode, HfFsErrorClass>;
+
+export function hfFsErrorClass(code: HfFsErrorCode): HfFsErrorClass {
+	return HF_FS_ERROR_CLASS_BY_CODE[code];
+}
+
 export interface HfFsRecoveryError {
 	code: HfFsErrorCode;
 	message: string;
