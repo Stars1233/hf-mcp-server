@@ -329,6 +329,39 @@ describe('HfFsTool', () => {
 		]);
 	});
 
+	it('isolates gated repository access errors while preserving successful results', async () => {
+		vi.mocked(pathsInfo).mockRejectedValueOnce(
+			Object.assign(new Error('Access to this gated repository is restricted.'), { statusCode: 401 })
+		);
+
+		const results = await new HfFsTool().runBatch({
+			operations: [
+				{ cmd: 'stat', args: ['hf://models/org/gated/config.json'] },
+				{ cmd: 'stat', args: ['hf://models'] },
+			],
+		});
+
+		expect(results).toMatchObject([
+			{
+				index: 0,
+				status: 'error',
+				error: {
+					code: 'HF_FS_ACCESS_DENIED',
+					retryable: false,
+				},
+			},
+			{
+				index: 1,
+				status: 'success',
+				executionResult: {
+					op: 'stat',
+					uri: 'hf://models',
+					exists: true,
+				},
+			},
+		]);
+	});
+
 	it('caps cumulative batch text and structured content', () => {
 		const items = [0, 1].map((index) => ({
 			index,

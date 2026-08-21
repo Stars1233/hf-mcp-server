@@ -126,6 +126,9 @@ describe('hf_fs MCP wiring', () => {
 	});
 
 	it('returns successful and failed operations together in input order', async () => {
+		vi.mocked(pathsInfo).mockRejectedValueOnce(
+			Object.assign(new Error('Access to this gated repository is restricted.'), { statusCode: 403 })
+		);
 		const apiClient = new McpApiClient({ type: 'static' }, transportInfo);
 		const factory = createServerFactory(apiClient);
 		const { server } = await factory({}, { builtInTools: [], spaceTools: [] }, true, {});
@@ -138,7 +141,7 @@ describe('hf_fs MCP wiring', () => {
 				name: 'hf_fs',
 				arguments: {
 					operations: [
-						{ cmd: 'cat', args: ['hf://models/org/repo'] },
+						{ cmd: 'stat', args: ['hf://models/org/gated/config.json'] },
 						{ cmd: 'stat', args: ['hf://models'] },
 					],
 				},
@@ -149,7 +152,10 @@ describe('hf_fs MCP wiring', () => {
 					{
 						index: 0,
 						status: 'error',
-						error: { code: 'HF_FS_NOT_A_FILE' },
+						error: {
+							code: 'HF_FS_ACCESS_DENIED',
+							retryable: false,
+						},
 					},
 					{
 						index: 1,

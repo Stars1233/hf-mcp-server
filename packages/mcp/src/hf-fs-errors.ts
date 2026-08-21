@@ -4,6 +4,7 @@ export const HF_FS_ERROR_CODES = [
 	'HF_FS_NOT_A_DIRECTORY',
 	'HF_FS_NOT_A_FILE',
 	'HF_FS_UNSUPPORTED_OPERATION',
+	'HF_FS_ACCESS_DENIED',
 	'HF_FS_TEXT_ONLY',
 	'HF_FS_IMAGE_ONLY',
 	'HF_FS_UNSUPPORTED_MEDIA',
@@ -91,6 +92,15 @@ export class HfFsAttachmentIntegrityError extends Error {
 export function classifyHfFsError(error: unknown): HfFsRecoveryError | undefined {
 	if (!(error instanceof Error)) {
 		return undefined;
+	}
+
+	const statusCode = errorStatusCode(error);
+	if (statusCode === 401 || statusCode === 403) {
+		return recoveryError(
+			'HF_FS_ACCESS_DENIED',
+			error.message,
+			'Authenticate with a Hugging Face token that can access this repository. For gated repositories, request access and accept any required terms before retrying.'
+		);
 	}
 
 	if (error instanceof HfFsTextOnlyError || errorCode(error) === 'HF_FS_TEXT_ONLY') {
@@ -226,4 +236,8 @@ function recoveryError(
 
 function errorCode(error: Error): unknown {
 	return 'code' in error ? error.code : undefined;
+}
+
+function errorStatusCode(error: Error): unknown {
+	return 'statusCode' in error ? error.statusCode : undefined;
 }

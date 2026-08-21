@@ -49,6 +49,17 @@ describe('hf-fs-errors', () => {
 		});
 	});
 
+	it.each([401, 403])('classifies Hub access status %s for per-operation recovery', (statusCode) => {
+		const error = Object.assign(new Error('Access to this gated repository is restricted.'), { statusCode });
+		expect(classifyHfFsError(error)).toEqual({
+			code: 'HF_FS_ACCESS_DENIED',
+			message: 'Access to this gated repository is restricted.',
+			recovery:
+				'Authenticate with a Hugging Face token that can access this repository. For gated repositories, request access and accept any required terms before retrying.',
+			retryable: false,
+		});
+	});
+
 	it.each([
 		[new HfFsUnsupportedMediaError('unsupported'), 'HF_FS_UNSUPPORTED_MEDIA', 'stat'],
 		[new HfFsImageTooLargeError('too large'), 'HF_FS_IMAGE_TOO_LARGE', 'stat'],
