@@ -94,12 +94,20 @@ export function classifyHfFsError(error: unknown): HfFsRecoveryError | undefined
 		return undefined;
 	}
 
-	const statusCode = errorStatusCode(error);
-	if (statusCode === 401 || statusCode === 403) {
+	const statusCode = providerStatusCode(error);
+	if (statusCode === 401 || statusCode === 403 || error.message.startsWith('EACCES:')) {
 		return recoveryError(
 			'HF_FS_ACCESS_DENIED',
 			error.message,
 			'Authenticate with a Hugging Face token that can access this repository. For gated repositories, request access and accept any required terms before retrying.'
+		);
+	}
+	if (statusCode === 404) {
+		return recoveryError(
+			'HF_FS_NOT_FOUND',
+			error.message,
+			'Use stat to verify the target or ls/find to discover a returned URI before retrying.',
+			'stat'
 		);
 	}
 
@@ -238,6 +246,11 @@ function errorCode(error: Error): unknown {
 	return 'code' in error ? error.code : undefined;
 }
 
-function errorStatusCode(error: Error): unknown {
-	return 'statusCode' in error ? error.statusCode : undefined;
+function providerStatusCode(error: Error): number | undefined {
+	const statusCode = 'statusCode' in error ? error.statusCode : undefined;
+	if (typeof statusCode === 'number') {
+		return statusCode;
+	}
+	const statusMatch = /\bstatus\s+(401|403|404)\b/i.exec(error.message);
+	return statusMatch?.[1] ? Number(statusMatch[1]) : undefined;
 }

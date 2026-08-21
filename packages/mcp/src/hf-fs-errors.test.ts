@@ -61,6 +61,19 @@ describe('hf-fs-errors', () => {
 	});
 
 	it.each([
+		[new Error('EACCES: permission denied'), 'HF_FS_ACCESS_DENIED'],
+		[new Error('Hub paper fetch failed with status 403: forbidden'), 'HF_FS_ACCESS_DENIED'],
+		[Object.assign(new Error('Repository was not found.'), { statusCode: 404 }), 'HF_FS_NOT_FOUND'],
+		[new Error('Hub tree fetch failed with status 404: missing'), 'HF_FS_NOT_FOUND'],
+	] as const)('classifies normalized provider error %s as %s', (error, code) => {
+		expect(classifyHfFsError(error)).toMatchObject({
+			code,
+			message: error.message,
+			retryable: false,
+		});
+	});
+
+	it.each([
 		[new HfFsUnsupportedMediaError('unsupported'), 'HF_FS_UNSUPPORTED_MEDIA', 'stat'],
 		[new HfFsImageTooLargeError('too large'), 'HF_FS_IMAGE_TOO_LARGE', 'stat'],
 		[new HfFsImageContentDisabledError(), 'HF_FS_IMAGE_CONTENT_DISABLED', 'stat'],
@@ -88,7 +101,8 @@ describe('hf-fs-errors', () => {
 
 	it('leaves unknown and provider errors unclassified', () => {
 		expect(classifyHfFsError(new Error('Space semantic search failed with status 500'))).toBeUndefined();
-		expect(classifyHfFsError(new Error('EACCES: access denied'))).toBeUndefined();
+		expect(classifyHfFsError(Object.assign(new Error('Rate limited'), { statusCode: 429 }))).toBeUndefined();
+		expect(classifyHfFsError(new Error('Provider rejected the request with status 400'))).toBeUndefined();
 		expect(classifyHfFsError('not an error')).toBeUndefined();
 	});
 });

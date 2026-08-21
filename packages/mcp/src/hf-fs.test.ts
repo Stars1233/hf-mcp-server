@@ -362,6 +362,40 @@ describe('HfFsTool', () => {
 		]);
 	});
 
+	it('isolates Hub SDK not-found errors while preserving successful results', async () => {
+		vi.mocked(listFiles).mockImplementation(() => {
+			throw new HubApiError('https://huggingface.co/api/models/org/missing/tree/main', 404);
+		});
+
+		const results = await new HfFsTool().runBatch({
+			operations: [
+				{ cmd: 'ls', args: ['hf://models/org/missing'] },
+				{ cmd: 'stat', args: ['hf://models'] },
+			],
+		});
+
+		expect(results).toMatchObject([
+			{
+				index: 0,
+				status: 'error',
+				error: {
+					code: 'HF_FS_NOT_FOUND',
+					retryable: false,
+					suggestedOperation: 'stat',
+				},
+			},
+			{
+				index: 1,
+				status: 'success',
+				executionResult: {
+					op: 'stat',
+					uri: 'hf://models',
+					exists: true,
+				},
+			},
+		]);
+	});
+
 	it('isolates malformed URI parser errors while preserving successful results', async () => {
 		const results = await new HfFsTool().runBatch({
 			operations: [

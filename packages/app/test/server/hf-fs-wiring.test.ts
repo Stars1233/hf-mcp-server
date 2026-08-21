@@ -159,9 +159,7 @@ describe('hf_fs MCP wiring', () => {
 	});
 
 	it('returns successful and failed operations together in input order', async () => {
-		vi.mocked(pathsInfo).mockRejectedValueOnce(
-			Object.assign(new Error('Access to this gated repository is restricted.'), { statusCode: 403 })
-		);
+		vi.mocked(pathsInfo).mockRejectedValueOnce(new Error('EACCES: access to this gated repository is restricted.'));
 		const apiClient = new McpApiClient({ type: 'static' }, transportInfo);
 		const factory = createServerFactory(apiClient);
 		const { server } = await factory({}, { builtInTools: [], spaceTools: [] }, true, {});
