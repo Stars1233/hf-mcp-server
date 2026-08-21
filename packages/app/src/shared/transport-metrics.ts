@@ -142,6 +142,7 @@ interface ClientMetrics {
 	activeConnections: number;
 	totalConnections: number;
 	toolCallCount: number;
+	toolCallErrorCount: number;
 	newIpCount: number;
 	anonCount: number;
 	uniqueAuthCount: number;
@@ -304,6 +305,8 @@ export interface TransportMetricsResponse {
 		};
 	};
 
+	hfFsMetrics?: HfFsLiveMetricsResponse;
+
 	clients: Array<{
 		name: string;
 		version: string;
@@ -314,6 +317,8 @@ export interface TransportMetricsResponse {
 		activeConnections: number;
 		totalConnections: number;
 		toolCallCount: number;
+		toolCallErrorCount: number;
+		toolCallErrorRate: number;
 		newIpCount: number;
 		anonCount: number;
 		uniqueAuthCount: number;
@@ -373,6 +378,27 @@ export interface TransportMetricsResponse {
 	gradioCacheMetrics?: GradioCacheMetrics;
 }
 
+export interface HfFsLiveMetricsResponse {
+	reportingSchema: 'hf_fs_batch_v1';
+	batches: {
+		total: number;
+		complete: number;
+		partial: number;
+		noneSucceeded: number;
+		failed: number;
+		cancelled: number;
+	};
+	operations: {
+		completed: number;
+		succeeded: number;
+		requestErrors: number;
+		targetErrors: number;
+		policyLimitErrors: number;
+		serviceErrors: number;
+	};
+	lastUpdated: string | null;
+}
+
 /**
  * Convert internal metrics to API response format
  */
@@ -413,6 +439,7 @@ export function formatMetricsForAPI(
 		},
 		clients: Array.from(metrics.clients.values()).map((client) => ({
 			...client,
+			toolCallErrorRate: client.toolCallCount > 0 ? (client.toolCallErrorCount / client.toolCallCount) * 100 : 0,
 			firstSeen: client.firstSeen.toISOString(),
 			lastSeen: client.lastSeen.toISOString(),
 			protocols: Array.from(client.protocols.values())
@@ -902,6 +929,7 @@ export class MetricsCounter {
 				activeConnections: 1,
 				totalConnections: 1,
 				toolCallCount: 0,
+				toolCallErrorCount: 0,
 				newIpCount: 0,
 				anonCount: 0,
 				uniqueAuthCount: 0,
@@ -993,11 +1021,14 @@ export class MetricsCounter {
 			clientMethodMetrics.count++;
 
 			// If this is a tool call, increment the client's tool call count
-			if (method.startsWith('tools/call:')) {
+			if (method === 'tools/call' || method.startsWith('tools/call:')) {
 				const clientKey = getClientKey(clientInfo.name, clientInfo.version);
 				const clientMetrics = this.metrics.clients.get(clientKey);
 				if (clientMetrics) {
 					clientMetrics.toolCallCount++;
+					if (isError) {
+						clientMetrics.toolCallErrorCount++;
+					}
 				}
 			}
 		}

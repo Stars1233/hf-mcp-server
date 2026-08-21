@@ -1,10 +1,11 @@
 import { createServer, type Server } from 'node:http';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WebServer } from '../../src/server/web-server.js';
 import type { BaseTransport, SessionMetadata } from '../../src/server/transport/base-transport.js';
 import { MetricsCounter } from '../../src/shared/transport-metrics.js';
 import { SERVER_CARD_PATH } from '../../src/server/server-card.js';
 import { createMetricsPageAuth, METRICS_PAGE_AUTH_COOKIE_NAME } from '../../src/server/utils/metrics-page-auth.js';
+import { recordHfFsLiveMetrics, resetHfFsLiveMetricsForTests } from '../../src/server/utils/hf-fs-live-metrics.js';
 
 const METRICS_PASSWORD = 'test metrics password & secret';
 
@@ -39,6 +40,10 @@ describe('WebServer', () => {
 	const servers: Server[] = [];
 	const webServers: WebServer[] = [];
 
+	beforeEach(() => {
+		resetHfFsLiveMetricsForTests();
+	});
+
 	afterEach(async () => {
 		await Promise.allSettled(webServers.map((server) => server.stop()));
 		await Promise.allSettled(servers.map((server) => close(server)));
@@ -64,6 +69,18 @@ describe('WebServer', () => {
 	});
 
 	it('omits analytics session details from stateless transport metrics', async () => {
+		recordHfFsLiveMetrics({
+			hfFsReportingSchema: 'hf_fs_batch_v1',
+			hfFsBatchOutcome: 'complete',
+			hfFsOperationsRequested: 2,
+			hfFsOperationsCompleted: 2,
+			hfFsOperationsSucceeded: 2,
+			hfFsRequestErrorCount: 0,
+			hfFsTargetErrorCount: 0,
+			hfFsPolicyLimitErrorCount: 0,
+			hfFsServiceErrorCount: 0,
+			hfFsOperationErrorsJson: '[]',
+		});
 		const webServer = new WebServer();
 		webServers.push(webServer);
 		const getSessions = vi.fn(() => [testSession()]);
@@ -81,10 +98,17 @@ describe('WebServer', () => {
 		await webServer.start(0);
 
 		const response = await fetch(`http://localhost:${webServerPort(webServer).toString()}/api/transport-metrics`);
-		const body = (await response.json()) as { sessions?: unknown[] };
+		const body = (await response.json()) as {
+			sessions?: unknown[];
+			hfFsMetrics?: { batches: { total: number }; operations: { completed: number; succeeded: number } };
+		};
 
 		expect(response.status).toBe(200);
 		expect(body.sessions).toEqual([]);
+		expect(body.hfFsMetrics).toMatchObject({
+			batches: { total: 1 },
+			operations: { completed: 2, succeeded: 2 },
+		});
 		expect(getSessions).not.toHaveBeenCalled();
 	});
 
