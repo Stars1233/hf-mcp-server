@@ -362,6 +362,37 @@ describe('HfFsTool', () => {
 		]);
 	});
 
+	it('isolates malformed URI parser errors while preserving successful results', async () => {
+		const results = await new HfFsTool().runBatch({
+			operations: [
+				{ cmd: 'stat', args: ['hf://bogus'] },
+				{ cmd: 'stat', args: ['hf://models'] },
+			],
+		});
+
+		expect(results).toMatchObject([
+			{
+				index: 0,
+				status: 'error',
+				error: {
+					code: 'HF_FS_INVALID_ARGUMENT',
+					message:
+						"EINVAL: Invalid URI type 'bogus'. Must be one of models, datasets, spaces, buckets, collections, papers.",
+					retryable: false,
+				},
+			},
+			{
+				index: 1,
+				status: 'success',
+				executionResult: {
+					op: 'stat',
+					uri: 'hf://models',
+					exists: true,
+				},
+			},
+		]);
+	});
+
 	it('caps cumulative batch text and structured content', () => {
 		const items = [0, 1].map((index) => ({
 			index,

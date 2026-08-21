@@ -2173,6 +2173,17 @@ function basename(path: string): string {
 }
 
 export function parseHfFsUri(uri: string): ParsedHfUri {
+	try {
+		return parseHfFsUriUnchecked(uri);
+	} catch (error) {
+		if (error instanceof Error && !error.message.startsWith('EINVAL:')) {
+			throw new Error(`EINVAL: ${error.message}`, { cause: error });
+		}
+		throw error;
+	}
+}
+
+function parseHfFsUriUnchecked(uri: string): ParsedHfUri {
 	if (!uri.startsWith('hf://')) {
 		throw new Error('URI must start with hf://.');
 	}

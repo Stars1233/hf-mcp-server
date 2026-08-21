@@ -102,6 +102,39 @@ describe('hf_fs MCP wiring', () => {
 				],
 			});
 
+			const malformed = await client.callTool({
+				name: 'hf_fs',
+				arguments: {
+					operations: [
+						{ cmd: 'stat', args: ['hf://bogus'] },
+						{ cmd: 'stat', args: ['hf://models'] },
+					],
+				},
+			});
+			expect(malformed.isError).not.toBe(true);
+			expect(malformed.structuredContent).toMatchObject({
+				results: [
+					{
+						index: 0,
+						status: 'error',
+						error: {
+							code: 'HF_FS_INVALID_ARGUMENT',
+							message: expect.stringContaining("Invalid URI type 'bogus'"),
+							retryable: false,
+						},
+					},
+					{
+						index: 1,
+						status: 'success',
+						result: {
+							op: 'stat',
+							uri: 'hf://models',
+							exists: true,
+						},
+					},
+				],
+			});
+
 			const notAFile = await client.callTool({
 				name: 'hf_fs',
 				arguments: { operations: [{ cmd: 'cat', args: ['hf://models/org/repo'] }] },
