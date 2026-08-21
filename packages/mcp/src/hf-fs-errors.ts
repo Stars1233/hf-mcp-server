@@ -4,10 +4,12 @@ export const HF_FS_ERROR_CODES = [
 	'HF_FS_NOT_A_DIRECTORY',
 	'HF_FS_NOT_A_FILE',
 	'HF_FS_UNSUPPORTED_OPERATION',
+	'HF_FS_ACCESS_DENIED',
 	'HF_FS_TEXT_ONLY',
 	'HF_FS_IMAGE_ONLY',
 	'HF_FS_UNSUPPORTED_MEDIA',
 	'HF_FS_IMAGE_TOO_LARGE',
+	'HF_FS_ATTACHMENT_BUDGET_EXCEEDED',
 	'HF_FS_IMAGE_CONTENT_DISABLED',
 	'HF_FS_ATTACHMENT_INTEGRITY',
 ] as const;
@@ -60,6 +62,15 @@ export class HfFsImageTooLargeError extends Error {
 	}
 }
 
+export class HfFsAttachmentBudgetExceededError extends Error {
+	readonly code = 'HF_FS_ATTACHMENT_BUDGET_EXCEEDED';
+
+	constructor(message: string) {
+		super(message);
+		this.name = 'HfFsAttachmentBudgetExceededError';
+	}
+}
+
 export class HfFsImageContentDisabledError extends Error {
 	readonly code = 'HF_FS_IMAGE_CONTENT_DISABLED';
 
@@ -81,6 +92,23 @@ export class HfFsAttachmentIntegrityError extends Error {
 export function classifyHfFsError(error: unknown): HfFsRecoveryError | undefined {
 	if (!(error instanceof Error)) {
 		return undefined;
+	}
+
+	const statusCode = providerStatusCode(error);
+	if (statusCode === 401 || statusCode === 403 || error.message.startsWith('EACCES:')) {
+		return recoveryError(
+			'HF_FS_ACCESS_DENIED',
+			error.message,
+			'Authenticate with a Hugging Face token that can access this repository. For gated repositories, request access and accept any required terms before retrying.'
+		);
+	}
+	if (statusCode === 404) {
+		return recoveryError(
+			'HF_FS_NOT_FOUND',
+			error.message,
+			'Use stat to verify the target or ls/find to discover a returned URI before retrying.',
+			'stat'
+		);
 	}
 
 	if (error instanceof HfFsTextOnlyError || errorCode(error) === 'HF_FS_TEXT_ONLY') {
@@ -117,6 +145,14 @@ export function classifyHfFsError(error: unknown): HfFsRecoveryError | undefined
 			error.message,
 			'Use stat for metadata. Attach cannot truncate images or exceed its configured complete-file limit.',
 			'stat'
+		);
+	}
+	if (error instanceof HfFsAttachmentBudgetExceededError || errorCode(error) === 'HF_FS_ATTACHMENT_BUDGET_EXCEEDED') {
+		return recoveryError(
+			'HF_FS_ATTACHMENT_BUDGET_EXCEEDED',
+			error.message,
+			'This attachment was omitted because other attachments already reserved the call’s shared 8 MiB payload budget. Retry it in a separate hf_fs call.',
+			'attach'
 		);
 	}
 	if (error instanceof HfFsImageContentDisabledError || errorCode(error) === 'HF_FS_IMAGE_CONTENT_DISABLED') {
@@ -208,4 +244,13 @@ function recoveryError(
 
 function errorCode(error: Error): unknown {
 	return 'code' in error ? error.code : undefined;
+}
+
+function providerStatusCode(error: Error): number | undefined {
+	const statusCode = 'statusCode' in error ? error.statusCode : undefined;
+	if (typeof statusCode === 'number') {
+		return statusCode;
+	}
+	const statusMatch = /\bstatus\s+(401|403|404)\b/i.exec(error.message);
+	return statusMatch?.[1] ? Number(statusMatch[1]) : undefined;
 }

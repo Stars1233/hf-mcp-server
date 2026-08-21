@@ -17,14 +17,13 @@ import {
 	HF_FS_ATTACH_MAX_BYTES,
 	HfFsTool,
 	HfFsAttachmentIntegrityError,
-	HfFsImageContentDisabledError,
 	classifyHfFsError,
-	formatHfFsMarkdown,
+	formatHfFsBatchMarkdown,
 	formatHfFsRecoveryError,
 	isHfFsAttachExecutionResult,
-	type HfFsAttachResult,
-	type HfFsExecutionResult,
-	type HfFsResult,
+	toHfFsBatchResult,
+	type HfFsBatchExecutionItem,
+	type HfFsBatchResult,
 	type HfFsRequest,
 	HfFsWriteTool,
 	formatHfFsWriteMarkdown,
@@ -94,16 +93,31 @@ function encodeHfFsAttachment(data: Uint8Array, expectedBytes: number): string {
 	return encoded;
 }
 
-type PreparedHfFsExecution = { metadata: HfFsAttachResult; imageData: string } | { metadata: HfFsResult };
+interface PreparedHfFsBatchExecution {
+	structuredContent: HfFsBatchResult;
+	text: string;
+	images: { data: string; mimeType: 'image/jpeg' | 'image/png' | 'image/webp' }[];
+	successCount: number;
+}
 
-function prepareHfFsExecution(executionResult: HfFsExecutionResult): PreparedHfFsExecution {
-	if (isHfFsAttachExecutionResult(executionResult)) {
-		return {
-			metadata: executionResult.metadata,
-			imageData: encodeHfFsAttachment(executionResult.data, executionResult.metadata.bytes),
-		};
-	}
-	return { metadata: executionResult };
+function prepareHfFsBatchExecution(items: readonly HfFsBatchExecutionItem[]): PreparedHfFsBatchExecution {
+	const images = items.flatMap((item) => {
+		if (item.status !== 'success' || !isHfFsAttachExecutionResult(item.executionResult)) {
+			return [];
+		}
+		return [
+			{
+				data: encodeHfFsAttachment(item.executionResult.data, item.executionResult.metadata.bytes),
+				mimeType: item.executionResult.metadata.mime_type,
+			},
+		];
+	});
+	return {
+		structuredContent: toHfFsBatchResult(items),
+		text: formatHfFsBatchMarkdown(items),
+		images,
+		successCount: items.filter((item) => item.status === 'success').length,
+	};
 }
 
 // Bouquet configurations moved to tool-selection-strategy.ts
@@ -451,55 +465,37 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 							logToolQuery,
 							{
 								methodName: hfFsToolConfig.name,
-								query: [request.cmd, ...request.args].join(' '),
+								query: request.operations.map((operation) => [operation.cmd, ...operation.args].join(' ')).join('\n'),
 								parameters: {
-									cmd: request.cmd,
-									args: request.args,
+									operations: request.operations,
 								},
 								baseOptions: getLoggingOptions(),
-								successOptions: ({ metadata: fsResult }) => {
-									const shared =
-										'entries' in fsResult
-											? fsResult.entries.length
-											: fsResult.op === 'stat' && !fsResult.exists
-												? 0
-												: 1;
+								successOptions: (batchResult) => {
 									return {
-										totalResults: 'entries' in fsResult ? fsResult.entries.length : shared,
-										resultsShared: shared,
-										responseCharCount: formatHfFsMarkdown(fsResult).length,
+										totalResults: request.operations.length,
+										resultsShared: batchResult.successCount,
+										responseCharCount: batchResult.text.length,
+										success: batchResult.successCount > 0,
 									};
 								},
 							},
 							async () => {
-								if (request.cmd === 'attach' && noImageContentHeaderEnabled) {
-									throw new HfFsImageContentDisabledError();
-								}
 								const tool = new HfFsTool(hfToken, undefined, ctx.mcpReq.signal);
-								const executionResult = await tool.run(request);
-								// Encode before success telemetry is emitted. Only metadata-derived metrics reach
-								// logToolQuery; neither the Uint8Array nor its base64 representation is logged.
-								return prepareHfFsExecution(executionResult);
+								const executionItems = await tool.runBatch(request, {
+									imageContentDisabled: noImageContentHeaderEnabled,
+								});
+								// Encode before success telemetry is emitted. Only aggregate metrics reach
+								// logToolQuery; neither Uint8Array data nor base64 image content is logged.
+								return prepareHfFsBatchExecution(executionItems);
 							}
 						);
-						const metadata = prepared.metadata;
-						const textContent = { type: 'text' as const, text: formatHfFsMarkdown(metadata) };
-						if ('imageData' in prepared) {
-							return {
-								structuredContent: { ...metadata },
-								content: [
-									textContent,
-									{
-										type: 'image' as const,
-										data: prepared.imageData,
-										mimeType: prepared.metadata.mime_type,
-									},
-								],
-							};
-						}
 						return {
-							structuredContent: { ...metadata },
-							content: [textContent],
+							...(prepared.successCount === 0 ? { isError: true } : {}),
+							structuredContent: prepared.structuredContent,
+							content: [
+								{ type: 'text' as const, text: prepared.text },
+								...prepared.images.map((image) => ({ type: 'image' as const, ...image })),
+							],
 						};
 					} catch (error) {
 						const recoveryError = classifyHfFsError(error);
