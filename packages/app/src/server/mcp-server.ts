@@ -13,7 +13,6 @@ import {
 	HubInspectTool,
 	type HubInspectParams,
 	HF_FS_TOOL_CONFIG,
-	HF_FS_TOOL_ID,
 	HF_FS_ATTACH_MAX_BYTES,
 	HfFsTool,
 	HfFsAttachmentIntegrityError,
@@ -74,6 +73,7 @@ import { AUTHENTICATION_UNVERIFIED_GUIDANCE, createHfWhoamiOutput, formatHfWhoam
 import { fetchHfWhoami } from './utils/hf-whoami-client.js';
 import { hfWhoamiOutputSchema } from './output-schemas/hf-whoami-output-schema.js';
 import { MCP_SERVER_NAME } from './server-card.js';
+import { buildServerInstructions } from './server-instructions.js';
 
 const MAX_HF_FS_ATTACHMENT_BASE64_BYTES = 4 * Math.ceil(HF_FS_ATTACH_MAX_BYTES / 3);
 
@@ -270,16 +270,13 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 		const clientDenied = isClientDenied(sessionInfo?.clientInfo?.name, headers?.['user-agent']);
 		const hasSkills = !!skillCatalog?.entries.length && !clientDenied;
 
-		// Get tool selection before creating the server so instructions can match advertised tools.
+		// Select tools before registering them on the new server.
 		const toolSelectionContext: ToolSelectionContext = {
 			headers,
 			userSettings,
 			hfToken,
 		};
 		const toolSelection = await toolSelectionStrategy.selectTools(toolSelectionContext);
-		const hfFsInstruction = toolSelection.enabledToolIds.includes(HF_FS_TOOL_ID)
-			? '\nhf:// URIs can be converted to browser URLs by replacing hf://buckets/OWNER/NAME/PATH with https://huggingface.co/buckets/OWNER/NAME/resolve/PATH; for models, datasets, and spaces, use https://huggingface.co[/datasets|/spaces]/OWNER/NAME/resolve/main/PATH. URL-encode each path segment.'
-			: '';
 
 		const server = new McpServer(
 			{
@@ -294,13 +291,7 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 				],
 			},
 			{
-				instructions:
-					'You have tools for using the Hugging Face Hub. ' +
-					userInfo +
-					hfFsInstruction +
-					" arXiv paper id's are often " +
-					'used as references between datasets, models and papers. There are over 100 tags in use, ' +
-					"common tags include 'Text Generation', 'Transformers', 'Image Classification' and so on.\n",
+				instructions: buildServerInstructions(userInfo),
 			}
 		);
 

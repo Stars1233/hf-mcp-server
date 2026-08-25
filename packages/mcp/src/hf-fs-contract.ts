@@ -39,7 +39,14 @@ export interface HfFsParams {
 	limit?: number;
 }
 
-export const HF_FS_DESCRIPTION = `Use hf_fs for Hugging Face Hub filesystem operations. Call it with operations, an array of {cmd, args} items; multiple operations may be submitted together.
+export const HF_FS_DESCRIPTION = `When to use: Hugging Face Hub models, datasets, Spaces, collections, papers, daily papers, today's trending models, current paper leaderboard, docs, and repository files.
+
+Examples:
+  {"operations":[{"cmd":"ls","args":["hf://models/trending","--limit","10"]}]}
+  {"operations":[{"cmd":"ls","args":["hf://papers/trending"]}]}
+  {"operations":[{"cmd":"ls","args":["hf://papers/daily/latest"]}]}
+
+Use hf_fs for Hugging Face Hub filesystem operations. Call it with operations, an array of {cmd, args} items; multiple operations may be submitted together.
 
 Usage:
   {"operations":[{"cmd":"ls","args":["hf://models/org/repo"]}]}
