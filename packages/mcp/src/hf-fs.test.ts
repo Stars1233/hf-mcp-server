@@ -113,6 +113,11 @@ describe('HfFsTool config', () => {
 		expect(HF_FS_TOOL_CONFIG.description).toContain('Grammar; each string below is one args array item');
 		expect(HF_FS_TOOL_CONFIG.description).toContain('ls hf://models/trending');
 		expect(HF_FS_TOOL_CONFIG.description).toContain('hf://papers/trending');
+		expect(HF_FS_TOOL_CONFIG.description).toContain('hf://papers/daily/latest');
+		expect(HF_FS_TOOL_CONFIG.description).toContain("today's trending models");
+		expect(HF_FS_TOOL_CONFIG.description).toContain('daily papers');
+		expect(HF_FS_TOOL_CONFIG.description.slice(0, 1024)).toContain('hf://models/trending');
+		expect(HF_FS_TOOL_CONFIG.description.slice(0, 1024)).toContain('hf://papers/daily/latest');
 		expect(HF_FS_TOOL_CONFIG.description).toContain('hf://README.md');
 		expect(HF_FS_TOOL_CONFIG.description).toContain('attach URI [--max-bytes N]');
 	});
