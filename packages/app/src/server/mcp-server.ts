@@ -45,6 +45,7 @@ import {
 	type InvokeResult,
 	type ToolResult,
 	VIEW_PARAMETERS,
+	CREATE_REPO_TOOL_ID,
 } from '@llmindset/hf-mcp';
 
 import type { ServerFactory, ServerFactoryResult, ServerRequestContext } from './transport/base-transport.js';
@@ -70,12 +71,27 @@ import {
 } from './utils/hf-fs-telemetry.js';
 import { recordHfFsLiveMetrics } from './utils/hf-fs-live-metrics.js';
 import { AUTHENTICATION_UNVERIFIED_GUIDANCE, createHfWhoamiOutput, formatHfWhoamiMarkdown } from './utils/hf-whoami.js';
-import { fetchHfWhoami } from './utils/hf-whoami-client.js';
+import { fetchHfWhoami, type HfWhoamiResponse } from './utils/hf-whoami-client.js';
 import { hfWhoamiOutputSchema } from './output-schemas/hf-whoami-output-schema.js';
 import { MCP_SERVER_NAME } from './server-card.js';
 import { buildServerInstructions } from './server-instructions.js';
+import { getGrantedOAuthScopes } from './utils/oauth-scopes.js';
 
 const MAX_HF_FS_ATTACHMENT_BASE64_BYTES = 4 * Math.ceil(HF_FS_ATTACH_MAX_BYTES / 3);
+const CREATE_REPO_OAUTH_SCOPES = new Set(['contribute-repos', 'write-repos']);
+
+function shouldAutoEnableCreateRepo(
+	enableHfFsWrite: boolean,
+	hfToken: string | undefined,
+	userDetails: HfWhoamiResponse | undefined
+): boolean {
+	if (!enableHfFsWrite || userDetails?.auth.type !== 'oauth') {
+		return false;
+	}
+
+	const grantedScopes = getGrantedOAuthScopes(hfToken);
+	return grantedScopes.scopes?.some((scope) => CREATE_REPO_OAUTH_SCOPES.has(scope)) === true;
+}
 
 function encodeHfFsAttachment(data: Uint8Array, expectedBytes: number): string {
 	if (
@@ -277,6 +293,12 @@ export const createServerFactory = (sharedApiClient: McpApiClient): ServerFactor
 			hfToken,
 		};
 		const toolSelection = await toolSelectionStrategy.selectTools(toolSelectionContext);
+		if (
+			shouldAutoEnableCreateRepo(toolSelection.behaviorFlags.enableHfFsWrite, hfToken, userDetails) &&
+			!toolSelection.enabledToolIds.includes(CREATE_REPO_TOOL_ID)
+		) {
+			toolSelection.enabledToolIds = [...toolSelection.enabledToolIds, CREATE_REPO_TOOL_ID];
+		}
 
 		const server = new McpServer(
 			{
