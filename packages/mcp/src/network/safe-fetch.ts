@@ -167,9 +167,9 @@ export async function safeFetch(url: string | URL, options: SafeFetchOptions): P
 
 		if (stripSensitiveHeadersOnCrossHostRedirect && currentUrl.origin !== nextUrl.origin) {
 			const filtered = dropSensitiveHeaders(baseHeaders);
-			baseHeaders.forEach((_, key) => {
+			for (const key of [...baseHeaders.keys()]) {
 				baseHeaders.delete(key);
-			});
+			}
 			filtered.forEach((value, key) => {
 				baseHeaders.set(key, value);
 			});
