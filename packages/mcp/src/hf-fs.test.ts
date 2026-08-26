@@ -110,6 +110,9 @@ describe('HfFsTool config', () => {
 		expect(HF_FS_TOOL_CONFIG.description).toContain('multiple operations may be submitted together');
 		expect(HF_FS_TOOL_CONFIG.description).toContain('{"operations":[{"cmd":"ls","args":["hf://models/org/repo"]}]}');
 		expect(HF_FS_TOOL_CONFIG.description).not.toContain('only tool');
+		expect(HF_FS_TOOL_CONFIG.schema.shape.operations.element.shape.args.description).toBe(
+			'Command arguments. First item must be an hf:// URI, not a local path or bare filename. One argument per array item.'
+		);
 		expect(HF_FS_TOOL_CONFIG.description).toContain('Grammar; each string below is one args array item');
 		expect(HF_FS_TOOL_CONFIG.description).toContain('ls hf://models/trending');
 		expect(HF_FS_TOOL_CONFIG.description).toContain('hf://papers/trending');

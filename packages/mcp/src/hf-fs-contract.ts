@@ -74,7 +74,11 @@ Omit --limit, --sort, and --type unless the request requires them. Limits and pa
 export const HF_FS_OPERATION_SCHEMA = z
 	.object({
 		cmd: z.enum(HF_FS_OPERATIONS).describe('Command to execute.'),
-		args: z.array(z.string()).describe('Command arguments; each array item is one grammar token.'),
+		args: z
+			.array(z.string())
+			.describe(
+				'Command arguments. First item must be an hf:// URI, not a local path or bare filename. One argument per array item.'
+			),
 	})
 	.strict();
 
