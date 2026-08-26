@@ -40,11 +40,11 @@ const AUTH_REQUIRED_MESSAGE =
 	'Hugging Face sandboxes require authentication because they create and control HF Jobs. Set HF_TOKEN or authenticate your MCP client, then retry with ?mix=sandbox or ?bouquet=sandbox.';
 const BOOTSTRAP_DOWNLOAD = `set -e
 d=/tmp/.sbx-server
-if command -v wget >/dev/null 2>&1; then wget -q --header "Authorization: Bearer $SBX_DL_TOKEN" -O "$d" "$SBX_SERVER_URL"
-elif command -v curl >/dev/null 2>&1; then curl -fsSL -H "Authorization: Bearer $SBX_DL_TOKEN" -o "$d" "$SBX_SERVER_URL"
+if command -v wget >/dev/null 2>&1; then wget -q -O "$d" "$SBX_SERVER_URL"
+elif command -v curl >/dev/null 2>&1; then curl -fsSL -o "$d" "$SBX_SERVER_URL"
 else cp "$SBX_SERVER_MOUNT/sbx-server" "$d"; fi
 chmod +x "$d"
-unset SBX_DL_TOKEN SBX_SERVER_URL SBX_SERVER_MOUNT
+unset SBX_SERVER_URL SBX_SERVER_MOUNT
 exec "$d"`;
 
 function handleDescription(username?: string): string {
@@ -965,7 +965,6 @@ export class HfSandboxTool extends SandboxToolBase {
 
 		const secrets: Record<string, string> = {
 			SBX_TOKEN: sandboxToken,
-			SBX_DL_TOKEN: hfToken,
 		};
 		if (params.forward_hf_token) {
 			secrets.HF_TOKEN = hfToken;

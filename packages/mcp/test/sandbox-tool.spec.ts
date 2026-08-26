@@ -173,17 +173,21 @@ describe('HfSandboxTool', () => {
 			MCP_SANDBOX_VOLUMES: JSON.stringify(STORED_VOLUMES),
 		});
 		expect(jobSpec.environment?.MCP_SANDBOX_NAME).toBeUndefined();
-		expect(jobSpec.secrets).toMatchObject({
-			SBX_DL_TOKEN: 'hf-token',
+		expect(jobSpec.secrets).toEqual({
+			SBX_TOKEN: expect.stringMatching(/^[0-9a-f]{64}$/),
 			HF_TOKEN: 'hf-token',
 		});
-		expect(jobSpec.secrets?.SBX_TOKEN).toMatch(/^[0-9a-f]{64}$/);
 		expect(jobSpec.volumes).toEqual([
 			...STORED_VOLUMES,
 			{ type: 'bucket', source: 'huggingface/sbx-server', mountPath: '/.hf-sbx-server', readOnly: true },
 		]);
 		expect(jobSpec.command[0]).toBe('/bin/sh');
-		expect(jobSpec.command[2]).toContain('sbx-server');
+		const bootstrap = jobSpec.command[2];
+		expect(bootstrap).toContain('sbx-server');
+		expect(bootstrap).toContain('wget -q -O "$d" "$SBX_SERVER_URL"');
+		expect(bootstrap).toContain('curl -fsSL -o "$d" "$SBX_SERVER_URL"');
+		expect(bootstrap).not.toContain('Authorization: Bearer');
+		expect(bootstrap).not.toContain('SBX_DL_TOKEN');
 	});
 
 	it('waits for sandbox health during create', async () => {
