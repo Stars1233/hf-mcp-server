@@ -193,6 +193,22 @@ describe('BOUQUETS configuration', () => {
 			expect(bouquet.spaceTools).toEqual([]);
 		}
 	});
+
+	it('should expose the OpenAI toolkit through openai bouquet', () => {
+		const bouquet = BOUQUETS.openai;
+		expect(bouquet).toBeDefined();
+		if (bouquet) {
+			expect(bouquet.builtInTools).toEqual([
+				HF_FS_TOOL_ID,
+				HUB_REPO_DETAILS_TOOL_ID,
+				REPO_SEARCH_TOOL_ID,
+				DYNAMIC_SPACE_TOOL_ID,
+				HF_JOBS_TOOL_ID,
+				...TOOL_ID_GROUPS.sandbox,
+			]);
+			expect(bouquet.spaceTools).toEqual([]);
+		}
+	});
 });
 
 describe('ToolSelectionStrategy', () => {
@@ -239,6 +255,17 @@ describe('ToolSelectionStrategy', () => {
 			expect(result.mode).toBe(ToolSelectionMode.BOUQUET_OVERRIDE);
 			expect(result.enabledToolIds).toEqual([...ANONYMOUS_BUILTIN_TOOL_IDS]);
 			expect(result.enabledToolIds).toContain(HF_FS_TOOL_ID);
+		});
+
+		it('should restrict anonymous openai bouquet users to its public tools', async () => {
+			const context: ToolSelectionContext = {
+				headers: { 'x-mcp-bouquet': 'openai' },
+			};
+
+			const result = await strategy.selectTools(context);
+
+			expect(result.mode).toBe(ToolSelectionMode.BOUQUET_OVERRIDE);
+			expect(result.enabledToolIds).toEqual([HF_FS_TOOL_ID, HUB_REPO_DETAILS_TOOL_ID, REPO_SEARCH_TOOL_ID]);
 		});
 
 		it('should use bouquet override for search bouquet', async () => {
@@ -293,6 +320,28 @@ describe('ToolSelectionStrategy', () => {
 			expect(result.mode).toBe(ToolSelectionMode.BOUQUET_OVERRIDE);
 			expect(result.enabledToolIds).toEqual(normalizeBuiltInTools(ALL_BUILTIN_TOOL_IDS));
 			expect(result.reason).toBe('Bouquet override: all');
+		});
+
+		it('should use bouquet override for openai bouquet', async () => {
+			const context: ToolSelectionContext = {
+				headers: { 'x-mcp-bouquet': 'openai' },
+				hfToken: 'test-token',
+			};
+
+			const result = await strategy.selectTools(context);
+
+			expect(result.mode).toBe(ToolSelectionMode.BOUQUET_OVERRIDE);
+			expect(result.enabledToolIds).toEqual([
+				HF_FS_TOOL_ID,
+				HUB_REPO_DETAILS_TOOL_ID,
+				REPO_SEARCH_TOOL_ID,
+				DYNAMIC_SPACE_TOOL_ID,
+				HF_JOBS_TOOL_ID,
+				HF_SANDBOX_TOOL_ID,
+				HF_SANDBOX_EXEC_TOOL_ID,
+				HF_SANDBOX_FS_TOOL_ID,
+			]);
+			expect(result.reason).toBe('Bouquet override: openai');
 		});
 
 		it('should use bouquet override for sandbox bouquet', async () => {
